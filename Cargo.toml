@@ -1,0 +1,44 @@
+[package]
+name = "alchemy-solana-bot"
+version = "0.1.0"
+edition = "2021"
+description = "Solana real-time data bot using Yellowstone gRPC (Geyser) interface"
+license = "MIT"
+
+[dependencies]
+# Yellowstone gRPC Geyser client
+yellowstone-grpc-client = "13.1.0"
+yellowstone-grpc-proto = "12.2.0"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Streaming utilities
+futures = "0.3"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Environment variable loading
+dotenvy = "0.15"
+
+# Error handling
+anyhow = "1"
+
+# Base-58 encoding (Solana's standard public-key / signature encoding)
+bs58 = "0.5"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+# ── Solana SDK ────────────────────────────────────────────────────────────────
+# Pinned to the 2.x release series so that solana-sdk and solana-client share
+# the same internal solana-transaction version and compile without trait errors.
+#
+# Core types: Keypair, Pubkey, Transaction, Instruction, system_instruction, …
+solana-sdk = "2.2"
+
+# Non-blocking JSON-RPC client for submitting signed transactions to the network
+solana-client = "2.2"
