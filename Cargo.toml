@@ -29,3 +29,10 @@ anyhow = "1"
 # Logging
 log = "0.4"
 env_logger = "0.11"
+
+# ── Solana SDK ────────────────────────────────────────────────────────────────
+# Core types: Keypair, Pubkey, Transaction, Instruction, SystemInstruction, …
+solana-sdk = "4.0.1"
+
+# Non-blocking JSON-RPC client for submitting signed transactions to the network
+solana-client = "4.0.0-beta.7"

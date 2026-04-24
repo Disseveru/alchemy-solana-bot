@@ -3,7 +3,7 @@ use {
     dotenvy::dotenv,
     futures::StreamExt,
     log::{error, info, warn},
-    std::{collections::HashMap, env, time::Duration},
+    std::{collections::HashMap, env, sync::Arc, time::Duration},
     tokio::time::sleep,
     yellowstone_grpc_client::{ClientTlsConfig, GeyserGrpcClient},
     yellowstone_grpc_proto::prelude::{
@@ -11,6 +11,9 @@ use {
         SubscribeRequestFilterAccounts, SubscribeRequestFilterTransactions,
     },
 };
+
+mod executor;
+use executor::{Executor, ExecutorConfig};
 
 /// How long to wait before attempting a reconnect after a stream failure.
 const RECONNECT_DELAY: Duration = Duration::from_secs(5);
@@ -50,10 +53,10 @@ fn build_subscribe_request() -> SubscribeRequest {
 }
 
 /// Connect to the Yellowstone gRPC endpoint and stream updates, printing each
-/// one to stdout.  Returns an error only if the connection itself fails;
-/// stream errors are handled by logging and triggering a reconnect from the
-/// caller.
-async fn run_stream(grpc_url: &str, x_token: &str) -> Result<()> {
+/// one to stdout and dispatching to the [`Executor`] for strategy evaluation.
+/// Returns an error only if the connection itself fails; stream errors are
+/// handled by logging and triggering a reconnect from the caller.
+async fn run_stream(grpc_url: &str, x_token: &str, executor: Arc<Executor>) -> Result<()> {
     info!("Connecting to gRPC endpoint: {}", grpc_url);
 
     let tls_config = ClientTlsConfig::new().with_native_roots();
@@ -91,6 +94,13 @@ async fn run_stream(grpc_url: &str, x_token: &str) -> Result<()> {
                                     info.lamports,
                                     account_update.slot
                                 );
+                                // ── Dispatch to Execution Logic ──────────
+                                if let Err(e) = executor
+                                    .on_account_update(info, account_update.slot)
+                                    .await
+                                {
+                                    warn!("[Executor] account handler error: {:#}", e);
+                                }
                             }
                         }
                         UpdateOneof::Transaction(tx_update) => {
@@ -100,6 +110,13 @@ async fn run_stream(grpc_url: &str, x_token: &str) -> Result<()> {
                                     bs58_encode(&tx_info.signature),
                                     tx_update.slot
                                 );
+                                // ── Dispatch to Execution Logic ──────────
+                                if let Err(e) = executor
+                                    .on_transaction(tx_info, tx_update.slot)
+                                    .await
+                                {
+                                    warn!("[Executor] transaction handler error: {:#}", e);
+                                }
                             }
                         }
                         UpdateOneof::Ping(_) => {
@@ -168,9 +185,12 @@ async fn main() -> Result<()> {
 
     info!("Alchemy Solana gRPC Bot starting…");
 
+    // Build the executor once and share it across reconnect iterations.
+    let executor = Arc::new(Executor::new(ExecutorConfig::default()));
+
     // Outer reconnect loop – keeps the bot running even if the stream drops.
     loop {
-        match run_stream(&grpc_url, &x_token).await {
+        match run_stream(&grpc_url, &x_token, Arc::clone(&executor)).await {
             Ok(()) => {
                 warn!("Stream closed. Reconnecting in {:?}…", RECONNECT_DELAY);
             }
