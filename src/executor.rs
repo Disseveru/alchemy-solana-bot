@@ -32,7 +32,7 @@
 
 use {
     anyhow::Result,
-    log::{debug, info},
+    log::{debug, info, warn},
     solana_client::nonblocking::rpc_client::RpcClient,
     solana_sdk::{
         instruction::Instruction,
@@ -170,7 +170,17 @@ impl Executor {
         account: &SubscribeUpdateAccountInfo,
         slot: u64,
     ) -> Result<()> {
-        let pubkey = Pubkey::try_from(account.pubkey.as_slice()).unwrap_or_default();
+        let pubkey = match Pubkey::try_from(account.pubkey.as_slice()) {
+            Ok(pk) => pk,
+            Err(e) => {
+                warn!(
+                    "[Executor] skipping account update with invalid pubkey ({} bytes): {:?}",
+                    account.pubkey.len(),
+                    e
+                );
+                return Ok(());
+            }
+        };
 
         debug!(
             "[Executor] account update | pubkey={} lamports={} data_len={} slot={}",
