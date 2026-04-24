@@ -11,7 +11,6 @@ use {
         SubscribeRequestFilterAccounts, SubscribeRequestFilterTransactions,
     },
 };
-
 mod executor;
 use executor::{Executor, ExecutorConfig};
 
@@ -90,7 +89,7 @@ async fn run_stream(grpc_url: &str, x_token: &str, executor: Arc<Executor>) -> R
                             if let Some(info) = &account_update.account {
                                 info!(
                                     "[Account] pubkey={} lamports={} slot={}",
-                                    bs58_encode(&info.pubkey),
+                                    bs58::encode(&info.pubkey).into_string(),
                                     info.lamports,
                                     account_update.slot
                                 );
@@ -107,7 +106,7 @@ async fn run_stream(grpc_url: &str, x_token: &str, executor: Arc<Executor>) -> R
                             if let Some(tx_info) = &tx_update.transaction {
                                 info!(
                                     "[Transaction] signature={} slot={}",
-                                    bs58_encode(&tx_info.signature),
+                                    bs58::encode(&tx_info.signature).into_string(),
                                     tx_update.slot
                                 );
                                 // ── Dispatch to Execution Logic ──────────
@@ -137,38 +136,6 @@ async fn run_stream(grpc_url: &str, x_token: &str, executor: Arc<Executor>) -> R
 
     warn!("Stream ended unexpectedly.");
     Ok(())
-}
-
-/// Encode a raw byte slice as a base-58 string (Solana's standard encoding).
-fn bs58_encode(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-    if bytes.is_empty() {
-        return String::new();
-    }
-    // Count leading zeros.
-    let leading_zeros = bytes.iter().take_while(|&&b| b == 0).count();
-    // Convert bytes to a big-integer via base-256.
-    let mut digits: Vec<u8> = vec![0];
-    for &byte in bytes {
-        let mut carry = byte as u32;
-        for d in digits.iter_mut() {
-            carry += (*d as u32) << 8;
-            *d = (carry % 58) as u8;
-            carry /= 58;
-        }
-        while carry > 0 {
-            digits.push((carry % 58) as u8);
-            carry /= 58;
-        }
-    }
-    let mut result = String::with_capacity(leading_zeros + digits.len());
-    for _ in 0..leading_zeros {
-        result.push(ALPHABET[0] as char);
-    }
-    for d in digits.iter().rev() {
-        result.push(ALPHABET[*d as usize] as char);
-    }
-    result
 }
 
 #[tokio::main]

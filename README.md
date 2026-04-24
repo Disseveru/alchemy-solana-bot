@@ -168,7 +168,7 @@ Open `src/executor.rs`.  Everything is labelled with `TODO` comments:
 | `Executor::new` | Load your real wallet keypair from disk or env |
 | `Executor::on_account_update` | React to account data changes (price feeds, pool reserves, …) |
 | `Executor::on_transaction` | React to on-chain transactions (DEX swaps, mints, …) |
-| `Executor::send_transaction` | Replace the stub body with the real signing + RPC call |
+| `Executor::send_transaction` | Already implemented – call it from your hooks with your instructions |
 
 ## Key dependencies
 

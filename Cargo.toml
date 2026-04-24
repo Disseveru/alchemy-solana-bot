@@ -26,13 +26,19 @@ dotenvy = "0.15"
 # Error handling
 anyhow = "1"
 
+# Base-58 encoding (Solana's standard public-key / signature encoding)
+bs58 = "0.5"
+
 # Logging
 log = "0.4"
 env_logger = "0.11"
 
 # ── Solana SDK ────────────────────────────────────────────────────────────────
-# Core types: Keypair, Pubkey, Transaction, Instruction, SystemInstruction, …
-solana-sdk = "4.0.1"
+# Pinned to the 2.x release series so that solana-sdk and solana-client share
+# the same internal solana-transaction version and compile without trait errors.
+#
+# Core types: Keypair, Pubkey, Transaction, Instruction, system_instruction, …
+solana-sdk = "2.2"
 
 # Non-blocking JSON-RPC client for submitting signed transactions to the network
-solana-client = "4.0.0-beta.7"
+solana-client = "2.2"

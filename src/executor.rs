@@ -13,8 +13,8 @@
 //!    [`Executor::new`].
 //! 2. **Add account-based rules** – see [`Executor::on_account_update`].
 //! 3. **Add transaction-based rules** – see [`Executor::on_transaction`].
-//! 4. **Send a transaction** – see [`Executor::send_transaction`] for the ready-
-//!    made helper; fill in the `TODO` inside it when you are ready.
+//! 4. **Send a transaction** – [`Executor::send_transaction`] is fully
+//!    implemented; just call it with your instructions.
 //!
 //! ## Solana SDK imports you will need
 //!
@@ -32,12 +32,14 @@
 
 use {
     anyhow::Result,
-    log::{debug, info, warn},
+    log::{debug, info},
     solana_client::nonblocking::rpc_client::RpcClient,
     solana_sdk::{
+        instruction::Instruction,
         pubkey::Pubkey,
-        signature::Keypair,
+        signature::{Keypair, Signature},
         signer::Signer,
+        transaction::Transaction,
     },
     yellowstone_grpc_proto::prelude::{
         SubscribeUpdateAccountInfo, SubscribeUpdateTransactionInfo,
@@ -57,7 +59,7 @@ use {
 pub struct ExecutorConfig {
     /// Solana JSON-RPC endpoint used to broadcast signed transactions.
     ///
-    /// **TODO:** Replace the default mainnet-beta URL with your private Alchemy
+    /// **TODO:** Replace the default public endpoint with your private Alchemy
     /// HTTP RPC endpoint for lower latency and higher rate limits:
     ///
     /// ```text
@@ -84,9 +86,12 @@ impl Default for ExecutorConfig {
 /// Geyser event to its methods.  Your trading logic lives here.
 pub struct Executor {
     /// Strategy configuration (RPC URL, thresholds, …).
+    #[allow(dead_code)]
     pub config: ExecutorConfig,
-    /// Non-blocking JSON-RPC client – used by `send_transaction` to broadcast
+    /// Non-blocking JSON-RPC client – used by [`send_transaction`] to broadcast
     /// signed transactions.
+    ///
+    /// [`send_transaction`]: Executor::send_transaction
     #[allow(dead_code)]
     rpc: RpcClient,
     /// The wallet that signs every outgoing transaction.
@@ -108,8 +113,9 @@ impl Executor {
     /// let wallet = read_keypair_file("/path/to/wallet.json")
     ///     .expect("Failed to read wallet keypair");
     ///
-    /// // Option B: load from an environment variable (base-58 private key)
-    /// let secret = std::env::var("WALLET_PRIVATE_KEY").expect("WALLET_PRIVATE_KEY not set");
+    /// // Option B: load from a base-58 private key in an env variable
+    /// let secret = std::env::var("WALLET_PRIVATE_KEY")
+    ///     .expect("WALLET_PRIVATE_KEY not set");
     /// let wallet = Keypair::from_base58_string(&secret);
     /// ```
     pub fn new(config: ExecutorConfig) -> Self {
@@ -117,11 +123,16 @@ impl Executor {
 
         // ── TODO (REQUIRED BEFORE GOING LIVE) ────────────────────────────────
         // Replace `Keypair::new()` with a real keypair loaded from disk or env.
-        // Using a throwaway keypair for now so the project compiles out-of-the-box.
+        // A throwaway keypair is used here so the project compiles and runs
+        // without any additional setup.
         let wallet = Keypair::new();
         // ─────────────────────────────────────────────────────────────────────
 
-        info!("[Executor] wallet address: {}", wallet.pubkey());
+        info!(
+            "[Executor] initialised | rpc={} | wallet={}",
+            config.rpc_url,
+            wallet.pubkey()
+        );
         Self { config, rpc, wallet }
     }
 
@@ -137,19 +148,17 @@ impl Executor {
     ///
     /// 1. Decode `account.data` to extract the numbers that matter to your
     ///    strategy (price, liquidity, flag bits, …).
-    /// 2. Apply your conditions.
-    /// 3. Call `self.send_transaction(...)` when a trade should fire.
+    /// 2. Apply your entry/exit conditions.
+    /// 3. Call `self.send_transaction(vec![your_instruction]).await?` to trade.
     ///
     /// ```rust,ignore
     /// // ── Example skeleton ──────────────────────────────────────────────────
-    /// use solana_sdk::{pubkey, instruction::Instruction};
+    /// use solana_sdk::{pubkey, system_instruction};
     ///
     /// const WATCHED: Pubkey = pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
     ///
     /// if Pubkey::try_from(account.pubkey.as_slice())? == WATCHED {
-    ///     // TODO: parse account.data here
-    ///     let price = decode_price(&account.data);
-    ///
+    ///     let price = decode_price(&account.data); // your decode function
     ///     if price < BUY_THRESHOLD {
     ///         let ix = build_buy_instruction(&self.wallet.pubkey(), AMOUNT_LAMPORTS);
     ///         self.send_transaction(vec![ix]).await?;
@@ -174,10 +183,10 @@ impl Executor {
         // ══════════════════════════════════════════════════════════════════════
         // TODO: ADD YOUR ACCOUNT-BASED TRADING LOGIC HERE
         //
-        //  ✦  Check `pubkey` against a watched address list.
+        //  ✦  Check `pubkey` against your watched address list.
         //  ✦  Decode `account.data` using your program's state layout.
-        //  ✦  Compare values against your entry/exit thresholds.
-        //  ✦  Call `self.send_transaction(vec![your_instruction])` to trade.
+        //  ✦  Compare values against your entry / exit thresholds.
+        //  ✦  Call `self.send_transaction(vec![your_instruction]).await?`.
         // ══════════════════════════════════════════════════════════════════════
 
         Ok(())
@@ -192,7 +201,7 @@ impl Executor {
     ///
     /// 1. Inspect `tx.transaction` for the message (accounts, instructions).
     /// 2. Inspect `tx.meta` for pre/post token balances and log messages.
-    /// 3. Call `self.send_transaction(...)` when your conditions are met.
+    /// 3. Call `self.send_transaction(vec![your_instruction]).await?` to trade.
     ///
     /// ```rust,ignore
     /// // ── Example skeleton ──────────────────────────────────────────────────
@@ -214,7 +223,7 @@ impl Executor {
     ) -> Result<()> {
         debug!(
             "[Executor] transaction | sig={} slot={}",
-            bs58_encode(&tx.signature),
+            bs58::encode(&tx.signature).into_string(),
             slot
         );
 
@@ -223,7 +232,7 @@ impl Executor {
         //
         //  ✦  Inspect `tx.transaction` (message accounts + instructions).
         //  ✦  Inspect `tx.meta` (log_messages, pre/post token balances, err).
-        //  ✦  Call `self.send_transaction(vec![your_instruction])` to trade.
+        //  ✦  Call `self.send_transaction(vec![your_instruction]).await?`.
         // ══════════════════════════════════════════════════════════════════════
 
         Ok(())
@@ -233,93 +242,37 @@ impl Executor {
 
     /// Sign and send a transaction, waiting for on-chain confirmation.
     ///
-    /// Pass in the list of [`solana_sdk::instruction::Instruction`]s you want
-    /// to execute.  The helper fetches the latest blockhash, builds a
-    /// [`solana_sdk::transaction::Transaction`], signs it with `self.wallet`,
-    /// and submits it to the RPC node.
+    /// Pass in the list of [`Instruction`]s you want to execute.  The helper
+    /// fetches the latest blockhash, builds a signed [`Transaction`], and
+    /// submits it via the configured RPC endpoint.
     ///
-    /// # TODO – implement when ready to trade
+    /// Returns the confirmed [`Signature`] on success.
     ///
-    /// The method body currently logs a warning and returns `Ok(())` so the
-    /// project compiles and runs without a real wallet.  When you are ready to
-    /// send real transactions, replace the body with the code in the doc
-    /// example below:
+    /// # Example
     ///
     /// ```rust,ignore
-    /// use solana_sdk::{signer::Signer, transaction::Transaction};
+    /// use solana_sdk::system_instruction;
     ///
-    /// pub async fn send_transaction(
-    ///     &self,
-    ///     instructions: Vec<solana_sdk::instruction::Instruction>,
-    /// ) -> Result<()> {
-    ///     let recent_blockhash = self.rpc.get_latest_blockhash().await?;
-    ///     let tx = Transaction::new_signed_with_payer(
-    ///         &instructions,
-    ///         Some(&self.wallet.pubkey()),
-    ///         &[&self.wallet],
-    ///         recent_blockhash,
-    ///     );
-    ///     let sig = self.rpc.send_and_confirm_transaction(&tx).await?;
-    ///     info!("[Executor] transaction confirmed: {}", sig);
-    ///     Ok(())
-    /// }
+    /// // Send 0.001 SOL to a recipient
+    /// let ix = system_instruction::transfer(
+    ///     &self.wallet.pubkey(),
+    ///     &recipient_pubkey,
+    ///     1_000_000, // lamports
+    /// );
+    /// let sig = self.send_transaction(vec![ix]).await?;
+    /// println!("confirmed: {}", sig);
     /// ```
-    ///
-    /// > **Note on SDK versions:** `solana-client` and `solana-sdk` must use
-    /// > compatible versions of `solana-transaction` internally.  If you see a
-    /// > `SerializableTransaction` trait error, pin both crates to the same
-    /// > Solana release series (e.g. both to `2.x` or both to `4.x`).
     #[allow(dead_code)]
-    pub async fn send_transaction(
-        &self,
-        instructions: Vec<solana_sdk::instruction::Instruction>,
-    ) -> Result<()> {
-        // ══════════════════════════════════════════════════════════════════════
-        // TODO: REPLACE THIS STUB WITH THE REAL IMPLEMENTATION (see doc above)
-        //
-        // self.rpc and self.wallet are already available.
-        // The code example in the rustdoc above shows exactly what to write.
-        // ══════════════════════════════════════════════════════════════════════
-        warn!(
-            "[Executor] send_transaction called with {} instruction(s) — \
-             stub not yet implemented. Add your real signing + RPC logic here.",
-            instructions.len()
+    pub async fn send_transaction(&self, instructions: Vec<Instruction>) -> Result<Signature> {
+        let recent_blockhash = self.rpc.get_latest_blockhash().await?;
+        let tx = Transaction::new_signed_with_payer(
+            &instructions,
+            Some(&self.wallet.pubkey()),
+            &[&self.wallet],
+            recent_blockhash,
         );
-        Ok(())
+        let sig = self.rpc.send_and_confirm_transaction(&tx).await?;
+        info!("[Executor] transaction confirmed: {}", sig);
+        Ok(sig)
     }
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Encode a raw byte slice as a base-58 string (Solana's standard encoding).
-fn bs58_encode(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-    if bytes.is_empty() {
-        return String::new();
-    }
-    let leading_zeros = bytes.iter().take_while(|&&b| b == 0).count();
-    let mut digits: Vec<u8> = vec![0];
-    for &byte in bytes {
-        let mut carry = byte as u32;
-        for d in digits.iter_mut() {
-            carry += (*d as u32) << 8;
-            *d = (carry % 58) as u8;
-            carry /= 58;
-        }
-        while carry > 0 {
-            digits.push((carry % 58) as u8);
-            carry /= 58;
-        }
-    }
-    let mut result = String::with_capacity(leading_zeros + digits.len());
-    for _ in 0..leading_zeros {
-        result.push(ALPHABET[0] as char);
-    }
-    for d in digits.iter().rev() {
-        result.push(ALPHABET[*d as usize] as char);
-    }
-    result
-}
-
