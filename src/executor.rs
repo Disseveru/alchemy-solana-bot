@@ -13,10 +13,7 @@ use {
     jito_protos::{
         bundle::{bundle_result::Result as BundleResultType, rejected::Reason, Bundle, BundleResult},
         packet::{Meta as ProtoPacketMeta, Packet as ProtoPacket},
-        searcher::{
-            searcher_service_client::SearcherServiceClient, GetTipAccountsRequest,
-            NextScheduledLeaderRequest, SendBundleRequest, SubscribeBundleResultsRequest,
-        },
+        searcher::{GetTipAccountsRequest, NextScheduledLeaderRequest, SendBundleRequest, SubscribeBundleResultsRequest},
     },
     jito_searcher_client::get_searcher_client_no_auth,
     log::{debug, info, warn},
@@ -469,10 +466,24 @@ impl Executor {
             .await
             .with_context(|| format!("failed to connect to Jito block engine at {block_engine_url}"))?;
 
-        let tip_account = self.resolve_tip_account(&mut client, strategy).await?;
-        if strategy.static_tip_account != Some(tip_account) {
-            debug!("[Executor] fetched Jito tip account {}", tip_account);
-        }
+        let tip_account = if let Some(account) = strategy.static_tip_account {
+            account
+        } else {
+            let response = client
+                .get_tip_accounts(GetTipAccountsRequest {})
+                .await
+                .context("failed to fetch Jito tip accounts")?
+                .into_inner();
+            let account = response
+                .accounts
+                .into_iter()
+                .next()
+                .ok_or_else(|| anyhow!("Jito did not return any tip accounts"))?;
+            let account = Pubkey::from_str(&account)
+                .context("invalid Jito tip account returned by block engine")?;
+            debug!("[Executor] fetched Jito tip account {}", account);
+            account
+        };
 
         let next_leader = client
             .get_next_scheduled_leader(NextScheduledLeaderRequest { regions: vec![] })
@@ -510,40 +521,11 @@ impl Executor {
 
         let bundle_id = response.uuid;
         info!("[Executor] Jito bundle submitted | bundle_id={}", bundle_id);
-        self.wait_for_bundle_result(&bundle_id, &mut bundle_results).await
-    }
 
-    async fn resolve_tip_account(
-        &self,
-        client: &mut SearcherServiceClient<tonic::transport::Channel>,
-        strategy: &AtomicArbStrategy,
-    ) -> Result<Pubkey> {
-        if let Some(account) = strategy.static_tip_account {
-            return Ok(account);
-        }
-
-        let response = client
-            .get_tip_accounts(GetTipAccountsRequest {})
-            .await
-            .context("failed to fetch Jito tip accounts")?
-            .into_inner();
-        let account = response
-            .accounts
-            .into_iter()
-            .next()
-            .ok_or_else(|| anyhow!("Jito did not return any tip accounts"))?;
-        Pubkey::from_str(&account).context("invalid Jito tip account returned by block engine")
-    }
-
-    async fn wait_for_bundle_result(
-        &self,
-        bundle_id: &str,
-        stream: &mut tonic::Streaming<BundleResult>,
-    ) -> Result<()> {
         let deadline = Instant::now() + BUNDLE_RESULT_TIMEOUT;
         while Instant::now() < deadline {
             let remaining = deadline.saturating_duration_since(Instant::now());
-            match timeout(remaining, stream.next()).await {
+            match timeout(remaining, bundle_results.next()).await {
                 Ok(Some(Ok(result))) => {
                     if result.bundle_id != bundle_id {
                         continue;

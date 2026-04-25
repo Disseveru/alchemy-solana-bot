@@ -45,8 +45,7 @@ solana-sdk = "2.1.0"
 solana-client = "2.1.0"
 
 # Strategy integrations
-anchor-lang = "0.30.0"
-spl-token = "9.0.0"
-tonic = { version = "0.10.2", features = ["tls", "tls-roots", "tls-webpki-roots"] }
+anchor-lang = "0.31.1"
+spl-token = "7.0.0"
 jito-searcher-client = { git = "https://github.com/jito-labs/searcher-examples", rev = "f710c30b0ec7449b5122f827b0997218ab1a0315", package = "jito-searcher-client" }
 jito-protos = { git = "https://github.com/jito-labs/searcher-examples", rev = "f710c30b0ec7449b5122f827b0997218ab1a0315", package = "jito-protos" }
