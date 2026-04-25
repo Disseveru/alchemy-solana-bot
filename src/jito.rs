@@ -45,7 +45,7 @@ pub async fn get_searcher_client_no_auth(
 async fn create_grpc_channel(url: &str) -> Result<Channel> {
     let mut endpoint =
         Endpoint::from_shared(url.to_string()).context("invalid Jito block engine URL")?;
-    if url.starts_with("https") {
+    if url.starts_with("https://") {
         endpoint = endpoint
             .tls_config(ClientTlsConfig::new().with_native_roots())
             .context("failed to configure Jito block engine TLS")?;
@@ -59,10 +59,11 @@ async fn create_grpc_channel(url: &str) -> Result<Channel> {
 pub fn proto_packet_from_versioned_tx(tx: &VersionedTransaction) -> Result<packet::Packet> {
     let data =
         bincode::serialize(tx).context("failed to serialize versioned transaction for Jito")?;
+    let data_len = data.len() as u64;
     Ok(packet::Packet {
-        data: data.clone(),
+        data,
         meta: Some(packet::Meta {
-            size: data.len() as u64,
+            size: data_len,
             addr: String::new(),
             port: 0,
             flags: None,

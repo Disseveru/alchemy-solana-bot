@@ -27,7 +27,6 @@ use {
         signer::Signer,
         transaction::{Transaction, VersionedTransaction},
     },
-    spl_token::native_mint,
     std::{
         collections::HashMap,
         env,
@@ -414,6 +413,19 @@ impl Executor {
         all_instructions.push(limit_ix);
         all_instructions.extend(instructions);
 
+        if let Some(strategy) = self.strategy.as_ref() {
+            if let Some(block_engine_url) = strategy.block_engine_url.as_deref() {
+            let tip_account = self.resolve_tip_account(strategy, block_engine_url).await?;
+            #[allow(deprecated)]
+            let tip_instruction = solana_sdk::system_instruction::transfer(
+                &self.wallet.pubkey(),
+                &tip_account,
+                opportunity.jito_tip_lamports,
+            );
+            all_instructions.push(tip_instruction);
+            }
+        }
+
         let recent_blockhash = self.rpc.get_latest_blockhash().await?;
         let tx = Transaction::new_signed_with_payer(
             &all_instructions,
@@ -666,7 +678,8 @@ impl Executor {
         if amount == 0 {
             return 0;
         }
-        if mint == WSOL_MINT || mint == native_mint::id().to_string() {
+        // `spl_token::native_mint::id()` is this same well-known wSOL mint address.
+        if mint == WSOL_MINT {
             return amount;
         }
         if mint == USDC_MINT || mint == USDT_MINT {
@@ -697,19 +710,35 @@ impl Executor {
             opportunity.flash_loan_fee_lamports,
         )?;
 
-        let tip_account = strategy.static_tip_account.ok_or_else(|| {
-            anyhow!(
-                "Jito tip account is unavailable; set JITO_TIP_ACCOUNT or configure JITO_BLOCK_ENGINE_URL"
-            )
-        })?;
-        #[allow(deprecated)]
-        let tip_instruction = solana_sdk::system_instruction::transfer(
-            &self.wallet.pubkey(),
-            &tip_account,
-            opportunity.jito_tip_lamports,
-        );
+        Ok(vec![borrow_ix, swap_ix, repay_ix])
+    }
 
-        Ok(vec![borrow_ix, swap_ix, repay_ix, tip_instruction])
+    async fn resolve_tip_account(
+        &self,
+        strategy: &AtomicArbStrategy,
+        block_engine_url: &str,
+    ) -> Result<Pubkey> {
+        if let Some(account) = strategy.static_tip_account {
+            return Ok(account);
+        }
+
+        let mut client = get_searcher_client_no_auth(block_engine_url)
+            .await
+            .with_context(|| format!("failed to connect to Jito block engine at {block_engine_url}"))?;
+        let response = client
+            .get_tip_accounts(GetTipAccountsRequest {})
+            .await
+            .context("failed to fetch Jito tip accounts")?
+            .into_inner();
+        let account = response
+            .accounts
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow!("Jito did not return any tip accounts"))?;
+        let account = Pubkey::from_str(&account)
+            .context("invalid Jito tip account returned by block engine")?;
+        debug!("[Executor] fetched Jito tip account {}", account);
+        Ok(account)
     }
 
     async fn submit_jito_bundle(
@@ -724,25 +753,6 @@ impl Executor {
         let mut client = get_searcher_client_no_auth(block_engine_url)
             .await
             .with_context(|| format!("failed to connect to Jito block engine at {block_engine_url}"))?;
-
-        let _tip_account = if let Some(account) = strategy.static_tip_account {
-            account
-        } else {
-            let response = client
-                .get_tip_accounts(GetTipAccountsRequest {})
-                .await
-                .context("failed to fetch Jito tip accounts")?
-                .into_inner();
-            let account = response
-                .accounts
-                .into_iter()
-                .next()
-                .ok_or_else(|| anyhow!("Jito did not return any tip accounts"))?;
-            let account = Pubkey::from_str(&account)
-                .context("invalid Jito tip account returned by block engine")?;
-            debug!("[Executor] fetched Jito tip account {}", account);
-            account
-        };
 
         let next_leader = client
             .get_next_scheduled_leader(NextScheduledLeaderRequest { regions: vec![] })
