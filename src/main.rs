@@ -285,79 +285,94 @@ async fn main() -> Result<()> {
         };
 
         // ── Build the ArbRoute ────────────────────────────────────────────────
-        // Replace every placeholder below with the real mainnet address.
+        // Replace every `Pubkey::default()` below with the verified mainnet address.
         // Verify each address with `solana account <PUBKEY>` before going live.
         //
-        // TODO: Fill in all fields for your target pair before setting ARB_ENABLED=true.
+        // IMPORTANT: The bot will NOT start if any required field is still
+        // Pubkey::default() — validate_route() enforces this at runtime.
+        // Fields marked "MUST be replaced" require custom SPL token account
+        // creation before the engine can run.
         let route = Arc::new(arb::ArbRoute {
             // ── Solend SOL reserve (main pool) ────────────────────────────────
+            // Verify: https://docs.solend.fi/protocol/addresses
             solend_reserve: "8PbodeaosQP19SjYFx855UMqWxH2HynZLdBXmsrbac36".parse()
                 .context("invalid solend_reserve")?,
             solend_reserve_liquidity_supply: "8UviNr47S8eL6J3WfDxMRa3hvLta1VDJwNWqsDgtN3Ud"
                 .parse()
                 .context("invalid solend_reserve_liquidity_supply")?,
-            // TODO: Replace with actual fee receiver from Solend docs
+            // Verify at https://docs.solend.fi/protocol/addresses — exact account may differ.
             solend_fee_receiver: "5bFegCNDLR5QfSTnFSHN42M5MejkgYDMBzE9agFi5DCC".parse()
                 .context("invalid solend_fee_receiver")?,
             solend_lending_market: "4UpD2fh7xH3VP9QQaXtsS1YY3bxzWhtfpks7FatyKvdY".parse()
                 .context("invalid solend_lending_market")?,
-            // TODO: Derive lending market authority PDA:
+            // Lending market authority PDA:
             //   seeds = [lending_market.as_ref()], program = SOLEND_PROGRAM
+            // Verify by running: `solana account DdZR6zRFiUt4S5mg7AV1uKB2z1f1WzcNYCaTEEWPAuby`
             solend_lending_market_authority: "DdZR6zRFiUt4S5mg7AV1uKB2z1f1WzcNYCaTEEWPAuby"
                 .parse()
                 .context("invalid solend_lending_market_authority")?,
-            // TODO: Create this SPL token account for your wallet before going live
-            our_loan_token_account: Pubkey::default(), // MUST be replaced
+            // MUST be replaced: SPL token account for the flash-borrowed asset (wSOL).
+            // Create: `spl-token create-account So11111111111111111111111111111111111111112`
+            our_loan_token_account: Pubkey::default(),
 
             // ── Raydium SOL–USDC AMM v4 pool ──────────────────────────────────
+            // Fetch pool accounts from: https://api.raydium.io/v2/sdk/liquidity/mainnet.json
             raydium_amm_id: "58oQChx4yWmvKdwLLZzBi4ChoCc2fqCUWaS6E7gexGD6".parse()
                 .context("invalid raydium_amm_id")?,
-            // TODO: Derive with seeds = [b"amm authority"], program = RAYDIUM_AMM_V4
+            // Authority PDA: seeds = [b"amm authority"], program = RAYDIUM_AMM_V4
             raydium_amm_authority: "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1".parse()
                 .context("invalid raydium_amm_authority")?,
-            raydium_amm_open_orders: Pubkey::default(), // TODO: fetch from pool state
-            raydium_amm_target_orders: Pubkey::default(), // TODO: fetch from pool state
-            raydium_pool_coin_vault: Pubkey::default(), // TODO: SOL vault
-            raydium_pool_pc_vault: Pubkey::default(),   // TODO: USDC vault
-            // OpenBook (Serum v3) — mainnet program
+            // Fetch open_orders, target_orders, vaults from pool state account:
+            //   `solana account 58oQChx4yWmvKdwLLZzBi4ChoCc2fqCUWaS6E7gexGD6 --output json`
+            raydium_amm_open_orders: Pubkey::default(),   // TODO: from pool state
+            raydium_amm_target_orders: Pubkey::default(), // TODO: from pool state
+            raydium_pool_coin_vault: Pubkey::default(),   // TODO: SOL vault from pool state
+            raydium_pool_pc_vault: Pubkey::default(),     // TODO: USDC vault from pool state
+            // OpenBook (Serum v3) program — mainnet, stable address
             raydium_serum_program: "srmqPvymJeFKQ4zGQed1GFppgkRHL9kaELCbyksJtPX".parse()
                 .context("invalid raydium_serum_program")?,
-            raydium_serum_market: Pubkey::default(),      // TODO: OpenBook SOL/USDC market
-            raydium_serum_bids: Pubkey::default(),        // TODO
-            raydium_serum_asks: Pubkey::default(),        // TODO
-            raydium_serum_event_queue: Pubkey::default(), // TODO
-            raydium_serum_coin_vault: Pubkey::default(),  // TODO
-            raydium_serum_pc_vault: Pubkey::default(),    // TODO
-            raydium_serum_vault_signer: Pubkey::default(), // TODO
-            // TODO: Create these SPL token accounts for your wallet
-            our_raydium_source: Pubkey::default(), // MUST be replaced (wSOL account)
-            our_raydium_dest: Pubkey::default(),   // MUST be replaced (USDC account)
+            // Fetch Serum accounts from pool state (marketId field and derive from market):
+            raydium_serum_market: Pubkey::default(),      // TODO: from pool state
+            raydium_serum_bids: Pubkey::default(),        // TODO: from OpenBook market state
+            raydium_serum_asks: Pubkey::default(),        // TODO: from OpenBook market state
+            raydium_serum_event_queue: Pubkey::default(), // TODO: from OpenBook market state
+            raydium_serum_coin_vault: Pubkey::default(),  // TODO: from OpenBook market state
+            raydium_serum_pc_vault: Pubkey::default(),    // TODO: from OpenBook market state
+            raydium_serum_vault_signer: Pubkey::default(), // TODO: from OpenBook market state
+            // MUST be replaced: SPL token accounts for the Raydium swap leg.
+            our_raydium_source: Pubkey::default(), // wSOL account owned by this wallet
+            our_raydium_dest: Pubkey::default(),   // USDC account owned by this wallet
 
             // ── Orca Whirlpool SOL–USDC ────────────────────────────────────────
+            // Fetch pool accounts from: https://api.mainnet.orca.so/v1/whirlpool/list
             orca_whirlpool: "HJPjoWUrhoZzkNfRpHuieeFk9WcZWjwy6PBjZ81ngndJ".parse()
                 .context("invalid orca_whirlpool")?,
-            orca_token_vault_a: Pubkey::default(), // TODO: fetch from whirlpool state
-            orca_token_vault_b: Pubkey::default(), // TODO: fetch from whirlpool state
-            // TODO: Derive tick arrays using orca-whirlpools SDK:
-            //   npx ts-node -e "const {getTickArrays} = require('@orca-so/whirlpools-sdk');
-            //                    // ... see Orca docs"
-            orca_tick_array_0: Pubkey::default(), // TODO
-            orca_tick_array_1: Pubkey::default(), // TODO
-            orca_tick_array_2: Pubkey::default(), // TODO
-            // Oracle PDA: seeds = [b"oracle", whirlpool.as_ref()]
-            orca_oracle: Pubkey::default(), // TODO
-            // TODO: Create these SPL token accounts for your wallet
-            our_orca_token_a: Pubkey::default(), // MUST be replaced
-            our_orca_token_b: Pubkey::default(), // MUST be replaced
+            // Fetch vault addresses from whirlpool state:
+            //   `solana account HJPjoWUrhoZzkNfRpHuieeFk9WcZWjwy6PBjZ81ngndJ --output json`
+            orca_token_vault_a: Pubkey::default(), // TODO: tokenVaultA from pool state
+            orca_token_vault_b: Pubkey::default(), // TODO: tokenVaultB from pool state
+            // Derive tick arrays using Orca Whirlpools SDK:
+            //   npx ts-node -e "const {getTickArrays} = require('@orca-so/whirlpools-sdk'); ..."
+            // See: https://orca-so.gitbook.io/orca-developer-portal
+            orca_tick_array_0: Pubkey::default(), // TODO: tick array for current range
+            orca_tick_array_1: Pubkey::default(), // TODO: next tick array
+            orca_tick_array_2: Pubkey::default(), // TODO: tick array after that
+            // Oracle PDA: seeds = [b"oracle", whirlpool.as_ref()], program = ORCA_WHIRLPOOL_PROGRAM
+            orca_oracle: Pubkey::default(), // TODO: derive PDA
+            // MUST be replaced: SPL token accounts for the Orca swap leg.
+            our_orca_token_a: Pubkey::default(), // SOL/wSOL account owned by this wallet
+            our_orca_token_b: Pubkey::default(), // USDC account owned by this wallet
 
             tip_accounts,
         });
 
         // Validate the route before starting the engine.
+        // If any field is still Pubkey::default() the engine will NOT start —
+        // this prevents accidental deployment with unconfigured placeholder addresses.
         if let Err(e) = arb::validate_route(&route) {
             warn!(
                 "[BackrunEngine] route validation failed — engine NOT started.\n\
-                 Fix the following and restart:\n{:#}",
+                 Fill in the Pubkey::default() placeholders in main.rs, then restart:\n{:#}",
                 e
             );
         } else {
