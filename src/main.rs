@@ -3,6 +3,7 @@ use {
     dotenvy::dotenv,
     futures::StreamExt,
     log::{error, info, warn},
+    solana_sdk::pubkey::Pubkey,
     std::{collections::HashMap, env, sync::Arc, time::Duration},
     tokio::time::sleep,
     yellowstone_grpc_client::{ClientTlsConfig, GeyserGrpcClient},
@@ -23,27 +24,50 @@ const RECONNECT_DELAY: Duration = Duration::from_secs(5);
 /// How often the background task refreshes the cached blockhash (~2 slots).
 const BLOCKHASH_REFRESH_INTERVAL: Duration = Duration::from_millis(800);
 
+/// Well-known DEX programs we want account updates from.
+///
+/// Restricting the `owner` filter means Geyser only sends us accounts owned by
+/// these programs (pool state, vault accounts, reserve accounts) rather than
+/// the entire account universe, which dramatically reduces stream bandwidth.
+const WATCHED_OWNERS: &[&str] = &[
+    "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8", // Raydium AMM v4
+    "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc",  // Orca Whirlpool
+    "So1endD9AkS2mttmbeS8S96ySZps9SML7RnZBjWdLLV",  // Solend
+];
+
+/// Well-known DEX programs we want transaction updates from.
+///
+/// Only transactions that touch one of these programs will be streamed.
+const WATCHED_TX_PROGRAMS: &[&str] = &[
+    "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8", // Raydium AMM v4
+    "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc",  // Orca Whirlpool
+    "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",  // Jupiter v6
+];
+
 /// Build a subscription request that listens for slot updates, account updates,
 /// and all non-vote transactions.
 fn build_subscribe_request() -> SubscribeRequest {
     let mut accounts: HashMap<String, SubscribeRequestFilterAccounts> = HashMap::new();
-    // An empty filter matches every account update.
-    accounts.insert("all_accounts".to_string(), SubscribeRequestFilterAccounts {
-        account: vec![],
-        owner: vec![],
-        filters: vec![],
-        nonempty_txn_signature: None,
-    });
+    // Filter to accounts owned by watched DEX programs to reduce stream bandwidth.
+    accounts.insert(
+        "dex_accounts".to_string(),
+        SubscribeRequestFilterAccounts {
+            account: vec![],
+            owner: WATCHED_OWNERS.iter().map(|s| s.to_string()).collect(),
+            filters: vec![],
+            nonempty_txn_signature: None,
+        },
+    );
 
     let mut transactions: HashMap<String, SubscribeRequestFilterTransactions> = HashMap::new();
-    // Subscribe to non-vote transactions only to reduce noise.
+    // Subscribe to non-vote transactions that touch our target DEX programs.
     transactions.insert(
-        "all_txns".to_string(),
+        "dex_txns".to_string(),
         SubscribeRequestFilterTransactions {
             vote: Some(false),
             failed: None,
             signature: None,
-            account_include: vec![],
+            account_include: WATCHED_TX_PROGRAMS.iter().map(|s| s.to_string()).collect(),
             account_exclude: vec![],
             account_required: vec![],
         },
@@ -197,26 +221,168 @@ async fn main() -> Result<()> {
     // Subscribes to the Jito mempool and submits flash-loan arbitrage bundles
     // when a profitable opportunity is detected.
     //
-    // TODO: Build an ArbRoute with the real pool/reserve addresses for your
-    // target trading pair and replace the placeholder below.
+    // Enable by setting ARB_ENABLED=true in .env.  Then fill in the ArbRoute
+    // below with the correct mainnet addresses for your target pair.
     //
-    // Example:
-    //   let route = Arc::new(arb::ArbRoute {
-    //       solend_reserve:                    "8PbodeaosQP19SjYFx855UMqWxH2HynZLdBXmsrbac36".parse()?,
-    //       solend_reserve_liquidity_supply:   "8UviNr47S8eL6J3WfDxMRa3hvLta1VDJwNWqsDgtN3Ud".parse()?,
-    //       // … fill in all remaining fields …
-    //       tip_accounts: executor.get_tip_accounts().await?,
-    //   });
-    //   let wallet = Arc::new(Keypair::new()); // replace with your funded wallet
-    //   let engine = Arc::new(arb::BackrunEngine::new(Arc::clone(&executor), wallet, route));
-    //   tokio::spawn(async move {
-    //       loop {
-    //           if let Err(e) = engine.run().await {
-    //               warn!("[BackrunEngine] restarting after error: {:#}", e);
-    //           }
-    //           sleep(Duration::from_secs(5)).await;
-    //       }
-    //   });
+    // ## SOL–USDC example addresses (verify before use!)
+    //
+    // Solend main pool (see https://docs.solend.fi/protocol/addresses):
+    //   solend_reserve:                  "8PbodeaosQP19SjYFx855UMqWxH2HynZLdBXmsrbac36"
+    //   solend_reserve_liquidity_supply: "8UviNr47S8eL6J3WfDxMRa3hvLta1VDJwNWqsDgtN3Ud"
+    //   solend_lending_market:           "4UpD2fh7xH3VP9QQaXtsS1YY3bxzWhtfpks7FatyKvdY"
+    //
+    // Raydium SOL–USDC pool v4 (see https://api.raydium.io/v2/ammV3/ammPools):
+    //   raydium_amm_id:      "58oQChx4yWmvKdwLLZzBi4ChoCc2fqCUWaS6E7gexGD6"
+    //
+    // Orca SOL–USDC Whirlpool (see https://api.mainnet.orca.so/v1/whirlpool/list):
+    //   orca_whirlpool:      "HJPjoWUrhoZzkNfRpHuieeFk9WcZWjwy6PBjZ81ngndJ"
+    //
+    // Token accounts (our_*) must be pre-created SPL token accounts owned by
+    // the bot wallet.  Create them with:
+    //   spl-token create-account <MINT> --owner <WALLET_PUBKEY>
+    //
+    // ## Steps to go live
+    //
+    //   1.  Fund the bot wallet with ≥ 0.1 SOL for fees + tips.
+    //   2.  Create the required token accounts (our_loan_token_account, etc.).
+    //   3.  Verify all route addresses on-chain (e.g. with `solana account <PUBKEY>`).
+    //   4.  Set ARB_ENABLED=true, fill in all ArbRoute fields below.
+    //   5.  Set RUST_LOG=debug for verbose output during testing.
+    //   6.  Run with `cargo run --release` for optimised performance.
+    //
+    // > ⚠️  WARNING: Flash-loan arbitrage carries real financial risk.
+    // >    Failed bundles still pay Jito tips.  Priority fees are burned even
+    // >    when the transaction reverts.  Competition from other MEV bots means
+    // >    profit is never guaranteed.  Start with small loan amounts.
+    if env::var("ARB_ENABLED").as_deref() == Ok("true") {
+        // Validate that the wallet is funded (non-ephemeral) before starting.
+        // The executor will have logged a warning if WALLET_PRIVATE_KEY is unset.
+
+        // Fetch Jito tip accounts from the block engine.
+        let tip_accounts: Vec<Pubkey> = match executor.get_tip_accounts().await {
+            Ok(accounts) => {
+                info!("[BackrunEngine] fetched {} Jito tip accounts", accounts.len());
+                accounts
+                    .iter()
+                    .filter_map(|s| s.parse().ok())
+                    .collect()
+            }
+            Err(e) => {
+                warn!(
+                    "[BackrunEngine] could not fetch tip accounts (Jito endpoint may be \
+                     unreachable): {:#}. Using hardcoded fallback.",
+                    e
+                );
+                // Jito tip accounts are publicly known and stable.
+                // Source: https://jito-labs.gitbook.io/mev/searcher-resources/tip-accounts
+                vec![
+                    "96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5".parse()?,
+                    "HFqU5x63VTqvQss8hp11i4wVV8bD44PvwucfZ2bU7gRe".parse()?,
+                    "Cw8CFyM9FkoMi7K7Crf6HNQqf4uEMzpKw6QNghXLvLkY".parse()?,
+                    "ADaUMid9yfUytqMBgopwjb2DTLSokTSzL1zt13ij6F8k".parse()?,
+                ]
+            }
+        };
+
+        // ── Build the ArbRoute ────────────────────────────────────────────────
+        // Replace every placeholder below with the real mainnet address.
+        // Verify each address with `solana account <PUBKEY>` before going live.
+        //
+        // TODO: Fill in all fields for your target pair before setting ARB_ENABLED=true.
+        let route = Arc::new(arb::ArbRoute {
+            // ── Solend SOL reserve (main pool) ────────────────────────────────
+            solend_reserve: "8PbodeaosQP19SjYFx855UMqWxH2HynZLdBXmsrbac36".parse()
+                .context("invalid solend_reserve")?,
+            solend_reserve_liquidity_supply: "8UviNr47S8eL6J3WfDxMRa3hvLta1VDJwNWqsDgtN3Ud"
+                .parse()
+                .context("invalid solend_reserve_liquidity_supply")?,
+            // TODO: Replace with actual fee receiver from Solend docs
+            solend_fee_receiver: "5bFegCNDLR5QfSTnFSHN42M5MejkgYDMBzE9agFi5DCC".parse()
+                .context("invalid solend_fee_receiver")?,
+            solend_lending_market: "4UpD2fh7xH3VP9QQaXtsS1YY3bxzWhtfpks7FatyKvdY".parse()
+                .context("invalid solend_lending_market")?,
+            // TODO: Derive lending market authority PDA:
+            //   seeds = [lending_market.as_ref()], program = SOLEND_PROGRAM
+            solend_lending_market_authority: "DdZR6zRFiUt4S5mg7AV1uKB2z1f1WzcNYCaTEEWPAuby"
+                .parse()
+                .context("invalid solend_lending_market_authority")?,
+            // TODO: Create this SPL token account for your wallet before going live
+            our_loan_token_account: Pubkey::default(), // MUST be replaced
+
+            // ── Raydium SOL–USDC AMM v4 pool ──────────────────────────────────
+            raydium_amm_id: "58oQChx4yWmvKdwLLZzBi4ChoCc2fqCUWaS6E7gexGD6".parse()
+                .context("invalid raydium_amm_id")?,
+            // TODO: Derive with seeds = [b"amm authority"], program = RAYDIUM_AMM_V4
+            raydium_amm_authority: "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1".parse()
+                .context("invalid raydium_amm_authority")?,
+            raydium_amm_open_orders: Pubkey::default(), // TODO: fetch from pool state
+            raydium_amm_target_orders: Pubkey::default(), // TODO: fetch from pool state
+            raydium_pool_coin_vault: Pubkey::default(), // TODO: SOL vault
+            raydium_pool_pc_vault: Pubkey::default(),   // TODO: USDC vault
+            // OpenBook (Serum v3) — mainnet program
+            raydium_serum_program: "srmqPvymJeFKQ4zGQed1GFppgkRHL9kaELCbyksJtPX".parse()
+                .context("invalid raydium_serum_program")?,
+            raydium_serum_market: Pubkey::default(),      // TODO: OpenBook SOL/USDC market
+            raydium_serum_bids: Pubkey::default(),        // TODO
+            raydium_serum_asks: Pubkey::default(),        // TODO
+            raydium_serum_event_queue: Pubkey::default(), // TODO
+            raydium_serum_coin_vault: Pubkey::default(),  // TODO
+            raydium_serum_pc_vault: Pubkey::default(),    // TODO
+            raydium_serum_vault_signer: Pubkey::default(), // TODO
+            // TODO: Create these SPL token accounts for your wallet
+            our_raydium_source: Pubkey::default(), // MUST be replaced (wSOL account)
+            our_raydium_dest: Pubkey::default(),   // MUST be replaced (USDC account)
+
+            // ── Orca Whirlpool SOL–USDC ────────────────────────────────────────
+            orca_whirlpool: "HJPjoWUrhoZzkNfRpHuieeFk9WcZWjwy6PBjZ81ngndJ".parse()
+                .context("invalid orca_whirlpool")?,
+            orca_token_vault_a: Pubkey::default(), // TODO: fetch from whirlpool state
+            orca_token_vault_b: Pubkey::default(), // TODO: fetch from whirlpool state
+            // TODO: Derive tick arrays using orca-whirlpools SDK:
+            //   npx ts-node -e "const {getTickArrays} = require('@orca-so/whirlpools-sdk');
+            //                    // ... see Orca docs"
+            orca_tick_array_0: Pubkey::default(), // TODO
+            orca_tick_array_1: Pubkey::default(), // TODO
+            orca_tick_array_2: Pubkey::default(), // TODO
+            // Oracle PDA: seeds = [b"oracle", whirlpool.as_ref()]
+            orca_oracle: Pubkey::default(), // TODO
+            // TODO: Create these SPL token accounts for your wallet
+            our_orca_token_a: Pubkey::default(), // MUST be replaced
+            our_orca_token_b: Pubkey::default(), // MUST be replaced
+
+            tip_accounts,
+        });
+
+        // Validate the route before starting the engine.
+        if let Err(e) = arb::validate_route(&route) {
+            warn!(
+                "[BackrunEngine] route validation failed — engine NOT started.\n\
+                 Fix the following and restart:\n{:#}",
+                e
+            );
+        } else {
+            let wallet = executor.wallet();
+            let engine = Arc::new(arb::BackrunEngine::new(
+                Arc::clone(&executor),
+                wallet,
+                route,
+            ));
+            tokio::spawn(async move {
+                loop {
+                    if let Err(e) = engine.run().await {
+                        warn!("[BackrunEngine] restarting after error: {:#}", e);
+                    }
+                    sleep(Duration::from_secs(5)).await;
+                }
+            });
+            info!("[BackrunEngine] engine started");
+        }
+    } else {
+        info!(
+            "[BackrunEngine] disabled (set ARB_ENABLED=true in .env to enable). \
+             Fill in the ArbRoute in main.rs first."
+        );
+    }
 
     // Outer reconnect loop – keeps the bot running even if the stream drops.
     loop {

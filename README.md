@@ -158,9 +158,142 @@ alchemy-solana-bot/
 └── README.md
 ```
 
-### Where to add your trading logic
+## How to run real arbitrage
 
-Open `src/executor.rs`.  Everything is labelled with `TODO` comments:
+> ⚠️ **WARNING: Flash-loan arbitrage involves real financial risk.**
+> Failed bundles still pay Jito tips.  Priority fees are burned even when a
+> transaction reverts on-chain.  Competition from other MEV bots means profit
+> is never guaranteed.  Start with the smallest viable loan amounts and verify
+> each step before going live.
+
+### Step-by-step setup
+
+#### 1. Fund the bot wallet
+
+The bot signs every arb transaction and pays Jito tips from this wallet.
+You need at least **0.1–0.5 SOL** to cover:
+- Jito tips per bundle (default 0.0001 SOL, configurable via `JITO_TIP_LAMPORTS`)
+- Transaction priority fees (default 0.04 SOL/tx at 100k µL/CU × 400k CUs)
+- Solana base transaction fee (~0.000005 SOL)
+
+Generate a new keypair:
+```bash
+solana-keygen new --no-bip39-passphrase --outfile wallet.json
+solana transfer --from ~/.config/solana/id.json $(solana-keygen pubkey wallet.json) 0.5
+```
+
+Export the keypair as base-58 for the `WALLET_PRIVATE_KEY` env var:
+```bash
+python3 -c "import json, base58; \
+    print(base58.b58encode(bytes(json.load(open('wallet.json')))).decode())"
+```
+
+Or use the `WALLET_KEY_FILE` env var to point at the JSON file directly:
+```env
+WALLET_KEY_FILE=/path/to/wallet.json
+```
+
+#### 2. Create SPL token accounts
+
+The bot needs pre-existing SPL token accounts to hold tokens during the flash loan.
+Create them for each mint involved in your route:
+
+```bash
+# Example for the SOL–USDC route (WSOL + USDC mint addresses):
+WSOL=So11111111111111111111111111111111111111112
+USDC=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
+WALLET=$(solana-keygen pubkey wallet.json)
+
+spl-token create-account $WSOL  --owner $WALLET --fee-payer wallet.json
+spl-token create-account $USDC  --owner $WALLET --fee-payer wallet.json
+```
+
+Set the resulting account addresses in `src/main.rs` in the `ArbRoute` block:
+- `our_loan_token_account` – account for the flash-borrowed asset (e.g. WSOL)
+- `our_raydium_source` / `our_raydium_dest` – accounts for the Raydium swap leg
+- `our_orca_token_a` / `our_orca_token_b` – accounts for the Orca swap leg
+
+#### 3. Verify route addresses
+
+All `ArbRoute` addresses must be verified on-chain before going live.
+Check each one with:
+```bash
+solana account <PUBKEY>
+```
+
+Key addresses for the SOL–USDC example:
+
+| Field | Address | Source |
+|-------|---------|--------|
+| `solend_reserve` | `8PbodeaosQP19SjYFx855UMqWxH2HynZLdBXmsrbac36` | [Solend docs](https://docs.solend.fi/protocol/addresses) |
+| `solend_lending_market` | `4UpD2fh7xH3VP9QQaXtsS1YY3bxzWhtfpks7FatyKvdY` | [Solend docs](https://docs.solend.fi/protocol/addresses) |
+| `raydium_amm_id` | `58oQChx4yWmvKdwLLZzBi4ChoCc2fqCUWaS6E7gexGD6` | [Raydium API](https://api.raydium.io/v2/ammV3/ammPools) |
+| `orca_whirlpool` | `HJPjoWUrhoZzkNfRpHuieeFk9WcZWjwy6PBjZ81ngndJ` | [Orca API](https://api.mainnet.orca.so/v1/whirlpool/list) |
+
+For Raydium pool-specific accounts (open orders, coin/PC vaults, Serum market),
+fetch the pool state account and decode the layout using the
+[Raydium SDK](https://github.com/raydium-io/raydium-sdk-V2) or
+[anchor-client](https://docs.rs/anchor-client).
+
+For Orca tick arrays, use the
+[Orca Whirlpools SDK](https://github.com/orca-so/whirlpools):
+```bash
+npx ts-node -e "
+  const { WhirlpoolContext, buildWhirlpoolClient } = require('@orca-so/whirlpools-sdk');
+  // Derive tick arrays for your pool and swap direction
+"
+```
+
+#### 4. Configure the environment
+
+Add the following to your `.env`:
+```dotenv
+WALLET_PRIVATE_KEY=<your-base58-key>   # or WALLET_KEY_FILE=/path/to/wallet.json
+RPC_URL=https://solana-mainnet.g.alchemy.com/v2/YOUR_KEY
+JITO_BLOCK_ENGINE_URL=https://mainnet.block-engine.jito.wtf:443
+ARB_ENABLED=true
+
+# Tune these for current network conditions:
+COMPUTE_UNIT_PRICE=200000    # 200k µL/CU during congestion
+JITO_TIP_LAMPORTS=200000     # 0.0002 SOL during competition
+```
+
+#### 5. Fill in the ArbRoute in main.rs
+
+Open `src/main.rs` and find the `if env::var("ARB_ENABLED") == Ok("true")` block.
+Replace every `Pubkey::default()` with the verified on-chain address.
+
+#### 6. Run with verbose logging first
+
+```bash
+RUST_LOG=debug cargo run --release
+```
+
+Watch for:
+- `[BackrunEngine] opportunity | loan=…` – opportunities are being detected
+- `[Executor] simulation OK` – pre-flight simulation is passing
+- `[BackrunEngine] bundle submitted | uuid=…` – bundles are landing
+
+#### 7. Monitor and tune
+
+- Check the Jito explorer at `https://explorer.jito.wtf/` for landed bundles.
+- Increase `COMPUTE_UNIT_PRICE` and `JITO_TIP_LAMPORTS` if bundles aren't landing.
+- Decrease `MIN_TARGET_SWAP_LAMPORTS` to capture smaller opportunities (at the
+  cost of more compute spent on detections that don't profit).
+- Monitor wallet balance regularly — failed arbs drain tips over time.
+
+### Security checklist
+
+- [ ] `WALLET_PRIVATE_KEY` / `WALLET_KEY_FILE` is in `.env`, not committed to git
+- [ ] `.env` is in `.gitignore` (it is by default in this repo)
+- [ ] Bot wallet is separate from your main Solana wallet
+- [ ] All route pubkeys verified with `solana account <PUBKEY>`
+- [ ] `ARB_ENABLED=false` in all non-production environments
+- [ ] Pre-flight simulation (`executor.simulate_transaction`) is enabled (it is by default)
+
+---
+
+
 
 | Location | What to add |
 |----------|-------------|
