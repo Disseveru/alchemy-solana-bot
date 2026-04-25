@@ -19,7 +19,7 @@ futures = "0.3"
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-bincode = "1.3.3"
+bincode = "1"
 
 # Environment variable loading
 dotenvy = "0.15"
@@ -39,18 +39,21 @@ env_logger = "0.11"
 # the same internal solana-transaction version and compile without trait errors.
 #
 # Core types: Keypair, Pubkey, Transaction, Instruction, system_instruction, …
-solana-sdk = "2.1.0"
+solana-sdk = "2.2"
 
 # Non-blocking JSON-RPC client for submitting signed transactions to the network
-solana-client = "2.1.0"
+solana-client = "2.2"
 
-# Strategy integrations
-anchor-lang = "0.31.1"
+# ── Jito gRPC / Tonic ────────────────────────────────────────────────────────
+# Versions are pinned to match what yellowstone-grpc-client already resolves to,
+# avoiding duplicate copies of the same crate in the dependency graph.
+tonic = "0.14"
+prost = "0.14"
+prost-types = "0.14"
+tonic-prost = "0.14"
 spl-token = "7.0.0"
-prost = "0.12"
-prost-types = "0.12"
-tonic = { version = "0.10.2", features = ["tls", "tls-roots", "tls-webpki-roots"] }
 
 [build-dependencies]
-tonic-build = "0.10.2"
-protoc-bin-vendored = "3.2.0"
+tonic-prost-build = "0.14"
+protoc-bin-vendored = "3"
+anyhow = "1"

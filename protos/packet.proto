@@ -27,4 +27,3 @@ message PacketFlags {
   bool tracer_packet = 5;
   bool from_staked_node = 6;
 }
-
