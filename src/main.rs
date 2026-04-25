@@ -12,6 +12,7 @@ use {
         SubscribeRequestFilterTransactions,
     },
 };
+mod arb;
 mod executor;
 mod jito;
 use executor::{Executor, ExecutorConfig};
@@ -191,6 +192,31 @@ async fn main() -> Result<()> {
             }
         });
     }
+
+    // ── Backrun engine task ───────────────────────────────────────────────────
+    // Subscribes to the Jito mempool and submits flash-loan arbitrage bundles
+    // when a profitable opportunity is detected.
+    //
+    // TODO: Build an ArbRoute with the real pool/reserve addresses for your
+    // target trading pair and replace the placeholder below.
+    //
+    // Example:
+    //   let route = Arc::new(arb::ArbRoute {
+    //       solend_reserve:                    "8PbodeaosQP19SjYFx855UMqWxH2HynZLdBXmsrbac36".parse()?,
+    //       solend_reserve_liquidity_supply:   "8UviNr47S8eL6J3WfDxMRa3hvLta1VDJwNWqsDgtN3Ud".parse()?,
+    //       // … fill in all remaining fields …
+    //       tip_accounts: executor.get_tip_accounts().await?,
+    //   });
+    //   let wallet = Arc::new(Keypair::new()); // replace with your funded wallet
+    //   let engine = Arc::new(arb::BackrunEngine::new(Arc::clone(&executor), wallet, route));
+    //   tokio::spawn(async move {
+    //       loop {
+    //           if let Err(e) = engine.run().await {
+    //               warn!("[BackrunEngine] restarting after error: {:#}", e);
+    //           }
+    //           sleep(Duration::from_secs(5)).await;
+    //       }
+    //   });
 
     // Outer reconnect loop – keeps the bot running even if the stream drops.
     loop {

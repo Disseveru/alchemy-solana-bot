@@ -214,6 +214,17 @@ impl Executor {
         Ok(())
     }
 
+    /// Return a cheap clone of the pre-initialised Jito gRPC client.
+    ///
+    /// Tonic clients clone by reference-counting the underlying channel, so
+    /// this does not create a new connection.  Use the returned client to open
+    /// additional streams (e.g. `subscribe_mempool`) without contending on a
+    /// shared mutex.
+    #[allow(dead_code)]
+    pub fn jito_client(&self) -> crate::jito::searcher::searcher_service_client::SearcherServiceClient<Channel> {
+        self.jito_client.clone()
+    }
+
     // ── Event hooks ───────────────────────────────────────────────────────────
 
     /// Called once for every account update.
