@@ -48,7 +48,13 @@ use {
 
 const PRIORITY_FEE_MICROLAMPORTS: u64 = 100_000;
 const WATCHED_PROGRAM: Pubkey = solana_sdk::pubkey!("675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8");
+const TRADING_SIGNAL_LOG_PATTERNS: [&str; 3] =
+    ["Instruction: Swap", "Instruction: Initialize", "initialize"];
 
+/// Placeholder Borsh layout for the watched account state.
+///
+/// Replace these fields with the exact schema exposed by the Raydium/Pump.fun
+/// account you want to trade against before using the decoded values live.
 #[derive(BorshDeserialize, Debug)]
 struct WatchedAccountState {
     price: u64,
@@ -131,7 +137,12 @@ impl Executor {
         let rpc = RpcClient::new(config.rpc_url.clone());
         let wallet_secret = std::env::var("WALLET_PRIVATE_KEY")
             .expect("WALLET_PRIVATE_KEY environment variable not set");
-        let wallet = Keypair::from_base58_string(&wallet_secret);
+        let wallet = std::panic::catch_unwind(|| Keypair::from_base58_string(&wallet_secret))
+            .unwrap_or_else(|_| {
+                panic!(
+                    "Failed to parse WALLET_PRIVATE_KEY: ensure it is a valid base58-encoded private key"
+                )
+            });
 
         info!(
             "[Executor] initialised | rpc={} | wallet={}",
@@ -263,7 +274,11 @@ impl Executor {
         if let Some(log_message) = meta
             .log_messages
             .iter()
-            .find(|log| log.contains("Swap") || log.contains("initialize"))
+            .find(|log| {
+                TRADING_SIGNAL_LOG_PATTERNS
+                    .iter()
+                    .any(|pattern| log.contains(pattern))
+            })
         {
             info!(
                 "[Executor] trading opportunity candidate | sig={} slot={} log={}",
