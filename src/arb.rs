@@ -103,6 +103,9 @@ const RAYDIUM_SWAP_BASE_OUT: u8 = 11;
 /// Computed as: `sha256("global:swap")[0..8]`
 const ORCA_SWAP_DISCRIMINATOR: [u8; 8] = [248, 198, 158, 145, 225, 117, 135, 200];
 
+/// Heuristic gross-profit estimate used as a cheap pre-filter before simulation.
+const HEURISTIC_PROFIT_BPS: u64 = 50;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Tunable parameters
 // ─────────────────────────────────────────────────────────────────────────────
@@ -577,7 +580,7 @@ impl BackrunEngine {
         // Conservative heuristic: assume 0.5 % of the notional as gross arb profit.
         // The pre-flight simulation in build_and_submit provides the actual safety net.
         // Replace with amm_output() once live pool reserves are cached.
-        let gross_output = swap_amount / 200; // 0.5 %
+        let gross_output = swap_amount.saturating_mul(HEURISTIC_PROFIT_BPS) / 10_000;
         let loan_fee = (swap_amount * self.config.solend_fee_bps) / 10_000;
 
         let total_cost = loan_fee.saturating_add(self.config.jito_tip_lamports);
@@ -710,6 +713,12 @@ impl BackrunEngine {
     /// Waits up to `config.max_retry_attempts` × increasing delays before
     /// giving up.  The initial delay is 200 ms, doubling each attempt up to 5 s.
     async fn submit_with_retry(&self, bundle: Bundle) -> Result<String> {
+        if self.config.max_retry_attempts == 0 {
+            return Err(anyhow::anyhow!(
+                "MAX_RETRY_ATTEMPTS must be greater than zero"
+            ));
+        }
+
         let mut delay = Duration::from_millis(200);
         for attempt in 1..=self.config.max_retry_attempts {
             let mut jito = self.executor.jito_client();
