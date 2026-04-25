@@ -7,7 +7,7 @@ You are an expert Rust and Solana developer. Your goal is to implement high-perf
 
 ### 1. Transaction & Fee Management
 - **Compute Budget:** Update the `send_transaction` function to include `ComputeBudgetInstruction::set_compute_unit_price`.
-- **Priority Fees:** Set a default compute unit price of **100,000 micro-lamports per compute unit** to help transactions land during high network congestion, and make this value configurable via env/config.
+- **Priority Fees:** Set a default compute unit price of **100,000 microlamports per compute unit** to help transactions land during high network congestion, and make this value configurable via env/config.
 - **Imports:** Ensure `solana_sdk::compute_budget::ComputeBudgetInstruction` is added to the relevant files.
 
 ### 2. Account & Transaction Monitoring
@@ -22,5 +22,5 @@ You are an expert Rust and Solana developer. Your goal is to implement high-perf
 
 ## File-Specific Instructions: `executor.rs`
 1. **Imports:** Add `use solana_sdk::compute_budget::ComputeBudgetInstruction;`.
-2. **Transaction Logic:** Inside `send_transaction`, append the compute unit price instruction to the instructions vector before the transaction is signed, using the configurable default of `100_000` micro-lamports per compute unit when no override is provided.
+2. **Transaction Logic:** Inside `send_transaction`, append the compute unit price instruction to the instructions vector before the transaction is signed, using the configurable default of `100_000` microlamports per compute unit when no override is provided.
 3. **Filtering:** Implement the `WATCHED_PROGRAM` owner filter within the account update handler, with an optional target account pubkey check layered on top when the strategy requires a single known account.
