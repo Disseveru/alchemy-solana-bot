@@ -83,6 +83,7 @@ dependencies = [
  "anchor-lang",
  "anyhow",
  "bincode",
+ "borsh 1.6.1",
  "bs58",
  "dotenvy",
  "env_logger",

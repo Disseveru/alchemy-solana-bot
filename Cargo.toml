@@ -46,6 +46,7 @@ solana-client = "2.1.0"
 
 # Strategy integrations
 anchor-lang = "0.31.1"
+borsh = "1.5.7"
 spl-token = "7.0.0"
 jito-searcher-client = { path = "vendor/jito-searcher-client" }
 jito-protos = { path = "vendor/jito-protos" }

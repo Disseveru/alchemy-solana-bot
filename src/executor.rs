@@ -8,10 +8,9 @@
 
 use {
     anyhow::{anyhow, bail, Context, Result},
-    anchor_lang::AnchorSerialize,
     futures::StreamExt,
     jito_protos::{
-        bundle::{bundle_result::Result as BundleResultType, rejected::Reason, Bundle, BundleResult},
+        bundle::{bundle_result::Result as BundleResultType, rejected::Reason, Bundle},
         packet::{Meta as ProtoPacketMeta, Packet as ProtoPacket},
         searcher::{GetTipAccountsRequest, NextScheduledLeaderRequest, SendBundleRequest, SubscribeBundleResultsRequest},
     },
@@ -32,7 +31,6 @@ use {
         collections::HashMap,
         env,
         str::FromStr,
-        sync::Arc,
         time::{Duration, Instant},
     },
     tokio::time::{sleep, timeout},
@@ -110,29 +108,12 @@ enum OpportunityKind {
     Liquidation,
 }
 
-#[derive(Debug)]
 pub struct Executor {
+    #[allow(dead_code)]
     pub config: ExecutorConfig,
     rpc: RpcClient,
     wallet: Keypair,
     strategy: Option<AtomicArbStrategy>,
-}
-
-#[derive(AnchorSerialize)]
-struct BorrowInstructionData {
-    amount: u64,
-}
-
-#[derive(AnchorSerialize)]
-struct SwapInstructionData {
-    amount_in: u64,
-    min_amount_out: u64,
-}
-
-#[derive(AnchorSerialize)]
-struct RepayInstructionData {
-    amount: u64,
-    fee_lamports: u64,
 }
 
 impl Executor {
@@ -248,7 +229,7 @@ impl Executor {
         Ok(())
     }
 
-    pub async fn send_transaction(
+    async fn send_transaction(
         &self,
         opportunity: &ArbitrageOpportunity,
         instructions: Vec<Instruction>,
@@ -392,11 +373,13 @@ impl Executor {
             .iter()
             .filter_map(|post| {
                 let pre = pre_balances.get(&(post.account_index, post.mint.clone()))?;
-                let pre_amount = pre.ui_token_amount.amount.parse::<u64>().ok()?;
-                let post_amount = post.ui_token_amount.amount.parse::<u64>().ok()?;
+                let pre_ui = pre.ui_token_amount.as_ref()?;
+                let post_ui = post.ui_token_amount.as_ref()?;
+                let pre_amount = pre_ui.amount.parse::<u64>().ok()?;
+                let post_amount = post_ui.amount.parse::<u64>().ok()?;
                 Some(self.token_amount_to_lamports_equivalent(
                     &post.mint,
-                    post.ui_token_amount.decimals,
+                    post_ui.decimals,
                     pre_amount.abs_diff(post_amount),
                 ))
             })
@@ -466,7 +449,7 @@ impl Executor {
             .await
             .with_context(|| format!("failed to connect to Jito block engine at {block_engine_url}"))?;
 
-        let tip_account = if let Some(account) = strategy.static_tip_account {
+        let _tip_account = if let Some(account) = strategy.static_tip_account {
             account
         } else {
             let response = client
@@ -557,9 +540,22 @@ impl Executor {
                                 Some(Reason::InternalError(reason)) => {
                                     format!("internal error: {}", reason.msg)
                                 }
+                                Some(Reason::DroppedBundle(reason)) => {
+                                    format!("dropped bundle: {:?}", reason)
+                                }
                                 None => "unknown rejection".to_string(),
                             };
                             bail!("bundle {} rejected by Jito: {}", bundle_id, reason);
+                        }
+                        Some(BundleResultType::Processed(processed)) => {
+                            debug!("[Executor] bundle processed | bundle_id={} msg={:?}", bundle_id, processed);
+                        }
+                        Some(BundleResultType::Finalized(finalized)) => {
+                            info!("[Executor] bundle finalized | bundle_id={} msg={:?}", bundle_id, finalized);
+                            return Ok(());
+                        }
+                        Some(BundleResultType::Dropped(dropped)) => {
+                            bail!("bundle {} dropped by Jito: {:?}", bundle_id, dropped);
                         }
                         None => {}
                     }
@@ -580,8 +576,7 @@ impl Executor {
             let status = self
                 .rpc
                 .get_signature_status_with_commitment(signature, CommitmentConfig::confirmed())
-                .await?
-                .value;
+                .await?;
             if matches!(status, Some(Ok(()))) {
                 return Ok(());
             }
@@ -639,33 +634,21 @@ impl StrategyInstructionTemplate {
     }
 
     fn render_borrow(&self, amount: u64) -> Result<Instruction> {
-        self.render(
-            BorrowInstructionData { amount }
-                .try_to_vec()
-                .context("failed to serialize borrow instruction data")?,
-        )
+        self.render(amount.to_le_bytes().to_vec())
     }
 
     fn render_swap(&self, amount_in: u64, min_amount_out: u64) -> Result<Instruction> {
-        self.render(
-            SwapInstructionData {
-                amount_in,
-                min_amount_out,
-            }
-            .try_to_vec()
-            .context("failed to serialize swap instruction data")?,
-        )
+        let mut data = Vec::with_capacity(16);
+        data.extend_from_slice(&amount_in.to_le_bytes());
+        data.extend_from_slice(&min_amount_out.to_le_bytes());
+        self.render(data)
     }
 
     fn render_repay(&self, amount: u64, fee_lamports: u64) -> Result<Instruction> {
-        self.render(
-            RepayInstructionData {
-                amount,
-                fee_lamports,
-            }
-            .try_to_vec()
-            .context("failed to serialize repay instruction data")?,
-        )
+        let mut data = Vec::with_capacity(16);
+        data.extend_from_slice(&amount.to_le_bytes());
+        data.extend_from_slice(&fee_lamports.to_le_bytes());
+        self.render(data)
     }
 
     fn render(&self, mut payload: Vec<u8>) -> Result<Instruction> {
