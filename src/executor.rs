@@ -32,9 +32,11 @@
 
 use {
     anyhow::Result,
+    borsh::BorshDeserialize,
     log::{debug, info, warn},
     solana_client::nonblocking::rpc_client::RpcClient,
     solana_sdk::{
+        compute_budget::ComputeBudgetInstruction,
         instruction::Instruction,
         pubkey::Pubkey,
         signature::{Keypair, Signature},
@@ -45,6 +47,15 @@ use {
         SubscribeUpdateAccountInfo, SubscribeUpdateTransactionInfo,
     },
 };
+
+const PRIORITY_FEE_MICROLAMPORTS: u64 = 100_000;
+const WATCHED_PROGRAM: Pubkey = solana_sdk::pubkey!("675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8");
+
+#[derive(BorshDeserialize, Debug)]
+struct WatchedAccountState {
+    price: u64,
+    liquidity: u64,
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Configuration
@@ -120,13 +131,9 @@ impl Executor {
     /// ```
     pub fn new(config: ExecutorConfig) -> Self {
         let rpc = RpcClient::new(config.rpc_url.clone());
-
-        // ── TODO (REQUIRED BEFORE GOING LIVE) ────────────────────────────────
-        // Replace `Keypair::new()` with a real keypair loaded from disk or env.
-        // A throwaway keypair is used here so the project compiles and runs
-        // without any additional setup.
-        let wallet = Keypair::new();
-        // ─────────────────────────────────────────────────────────────────────
+        let wallet_secret = std::env::var("WALLET_PRIVATE_KEY")
+            .expect("WALLET_PRIVATE_KEY environment variable not set");
+        let wallet = Keypair::from_base58_string(&wallet_secret);
 
         info!(
             "[Executor] initialised | rpc={} | wallet={}",
@@ -190,14 +197,29 @@ impl Executor {
             slot
         );
 
-        // ══════════════════════════════════════════════════════════════════════
-        // TODO: ADD YOUR ACCOUNT-BASED TRADING LOGIC HERE
-        //
-        //  ✦  Check `pubkey` against your watched address list.
-        //  ✦  Decode `account.data` using your program's state layout.
-        //  ✦  Compare values against your entry / exit thresholds.
-        //  ✦  Call `self.send_transaction(vec![your_instruction]).await?`.
-        // ══════════════════════════════════════════════════════════════════════
+        if pubkey != WATCHED_PROGRAM {
+            return Ok(());
+        }
+
+        match WatchedAccountState::try_from_slice(account.data.as_slice()) {
+            Ok(state) => {
+                debug!(
+                    "[Executor] decoded watched account | pubkey={} price={} liquidity={} slot={}",
+                    pubkey,
+                    state.price,
+                    state.liquidity,
+                    slot
+                );
+            }
+            Err(err) => {
+                debug!(
+                    "[Executor] watched account decode skeleton could not deserialize {} bytes for {}: {}",
+                    account.data.len(),
+                    pubkey,
+                    err
+                );
+            }
+        }
 
         Ok(())
     }
@@ -231,19 +253,30 @@ impl Executor {
         tx: &SubscribeUpdateTransactionInfo,
         slot: u64,
     ) -> Result<()> {
+        let signature = bs58::encode(&tx.signature).into_string();
         debug!(
             "[Executor] transaction | sig={} slot={}",
-            bs58::encode(&tx.signature).into_string(),
+            signature,
             slot
         );
 
-        // ══════════════════════════════════════════════════════════════════════
-        // TODO: ADD YOUR TRANSACTION-BASED TRADING LOGIC HERE
-        //
-        //  ✦  Inspect `tx.transaction` (message accounts + instructions).
-        //  ✦  Inspect `tx.meta` (log_messages, pre/post token balances, err).
-        //  ✦  Call `self.send_transaction(vec![your_instruction]).await?`.
-        // ══════════════════════════════════════════════════════════════════════
+        let Some(meta) = tx.meta.as_ref() else {
+            debug!("[Executor] transaction has no metadata | sig={}", signature);
+            return Ok(());
+        };
+
+        if let Some(log_message) = meta
+            .log_messages
+            .iter()
+            .find(|log| log.contains("Swap") || log.contains("initialize"))
+        {
+            info!(
+                "[Executor] trading opportunity candidate | sig={} slot={} log={}",
+                signature,
+                slot,
+                log_message
+            );
+        }
 
         Ok(())
     }
@@ -275,8 +308,14 @@ impl Executor {
     #[allow(dead_code)]
     pub async fn send_transaction(&self, instructions: Vec<Instruction>) -> Result<Signature> {
         let recent_blockhash = self.rpc.get_latest_blockhash().await?;
+        let mut instructions_with_priority_fee =
+            Vec::with_capacity(instructions.len() + 1);
+        instructions_with_priority_fee.push(
+            ComputeBudgetInstruction::set_compute_unit_price(PRIORITY_FEE_MICROLAMPORTS),
+        );
+        instructions_with_priority_fee.extend(instructions);
         let tx = Transaction::new_signed_with_payer(
-            &instructions,
+            &instructions_with_priority_fee,
             Some(&self.wallet.pubkey()),
             &[&self.wallet],
             recent_blockhash,
