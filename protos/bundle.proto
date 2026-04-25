@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package bundle;
+
+import "packet.proto";
+
+// A bundle is a group of transactions submitted atomically to the Jito Block Engine.
+message Bundle {
+  repeated packet.Packet packets = 1;
+}
+
+// Result of a bundle submission returned via the SubscribeBundleResults stream.
+message BundleResult {
+  string bundle_id = 1;
+  oneof result {
+    Accepted accepted = 2;
+    Rejected rejected = 3;
+  }
+}
+
+message Accepted {}
+
+message Rejected {
+  string msg = 1;
+}

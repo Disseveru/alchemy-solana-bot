@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package shared;
+
+// Shared header used across Jito gRPC messages.
+message Header {
+  // Unix timestamp in nanoseconds.
+  uint64 ts_nanos = 1;
+}

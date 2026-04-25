@@ -1,0 +1,17 @@
+# Railway deployment configuration for alchemy-solana-bot
+# See: https://docs.railway.app/reference/config-as-code
+
+[build]
+# Build the release binary.  Railway automatically detects Rust projects
+# and uses `cargo build --release` by default, but we set it explicitly
+# for clarity.
+builder = "NIXPACKS"
+buildCommand = "cargo build --release"
+
+[deploy]
+# Start the compiled binary.
+startCommand = "./target/release/alchemy-solana-bot"
+
+# Restart automatically if the process exits (stream errors, etc.)
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10

@@ -1,0 +1,55 @@
+syntax = "proto3";
+
+package searcher;
+
+import "bundle.proto";
+
+// Jito Block Engine Searcher Service.
+service SearcherService {
+  // Submit a bundle of transactions for atomic inclusion.
+  rpc SendBundle(SendBundleRequest) returns (SendBundleResponse) {}
+
+  // Subscribe to a stream of bundle result notifications.
+  rpc SubscribeBundleResults(SubscribeBundleResultsRequest) returns (stream bundle.BundleResult) {}
+
+  // Retrieve the list of tip accounts (one must receive a lamport tip per bundle).
+  rpc GetTipAccounts(GetTipAccountsRequest) returns (GetTipAccountsResponse) {}
+
+  // Subscribe to a stream of pending (mempool) transactions for backrunning.
+  // Transactions are filtered to those involving the requested program IDs.
+  rpc SubscribeMempool(SubscribeMempoolRequest) returns (stream PendingTxNotification) {}
+}
+
+message SendBundleRequest {
+  bundle.Bundle bundle = 1;
+}
+
+message SendBundleResponse {
+  // Jito-assigned UUID for tracking the bundle.
+  string uuid = 1;
+}
+
+message SubscribeBundleResultsRequest {}
+
+message GetTipAccountsRequest {}
+
+message GetTipAccountsResponse {
+  repeated string accounts = 1;
+}
+
+// Request to subscribe to the Jito mempool.
+message SubscribeMempoolRequest {
+  // Filter to transactions involving these program IDs (base-58 encoded).
+  // An empty list means no filter – all pending transactions are streamed.
+  repeated string programs = 1;
+
+  // Filter to transactions signed by or referencing these accounts (base-58).
+  // An empty list means no filter.
+  repeated string accounts = 2;
+}
+
+// A batch of pending (unconfirmed) transactions from the Jito mempool.
+message PendingTxNotification {
+  // Raw serialised transactions in Solana wire format (bincode).
+  repeated bytes transactions = 1;
+}
