@@ -310,6 +310,20 @@ impl Executor {
         Ok(())
     }
 
+    /// Build the two compute budget instructions for every outgoing transaction.
+    ///
+    /// Calling code (e.g. [`crate::arb::BackrunEngine::build_and_submit`]) prepends
+    /// these so arb transactions compete for block inclusion under congestion.
+    ///
+    /// Returns `[SetComputeUnitPrice, SetComputeUnitLimit]` using the values from
+    /// [`ExecutorConfig`].
+    pub fn compute_budget_ixs(&self) -> [Instruction; 2] {
+        [
+            ComputeBudgetInstruction::set_compute_unit_price(self.config.compute_unit_price),
+            ComputeBudgetInstruction::set_compute_unit_limit(self.config.compute_unit_limit),
+        ]
+    }
+
     /// Return a cheap clone of the pre-initialised Jito gRPC client.
     ///
     /// Tonic clients clone by reference-counting the underlying channel, so

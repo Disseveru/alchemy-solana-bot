@@ -295,13 +295,137 @@ Watch for:
 
 
 
-| Location | What to add |
-|----------|-------------|
-| `ExecutorConfig` struct | Extra fields your strategy needs (thresholds, target addresses, …) |
-| `Executor::new` | Load your real wallet keypair from disk or env |
-| `Executor::on_account_update` | React to account data changes (price feeds, pool reserves, …) |
-| `Executor::on_transaction` | React to on-chain transactions (DEX swaps, mints, …) |
-| `Executor::send_transaction` | Already implemented – call it from your hooks with your instructions |
+## Deploy to the cloud (run 24/7 for ~$5/month)
+
+This section shows you how to run the bot on a cheap cloud server so it keeps running even when your phone is off. **Railway.app** is the easiest option for beginners — no credit card needed for the free tier.
+
+---
+
+### Option A – Railway (easiest, recommended)
+
+Railway builds and runs your code automatically from GitHub.
+
+#### Step 1 — Create a Railway account
+
+1. Open [railway.app](https://railway.app) on your phone or computer.
+2. Click **Sign up** and sign in with your GitHub account.
+
+#### Step 2 — Deploy from GitHub
+
+Click the button below to start a new project from this repo:
+
+[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new/template?template=https://github.com/Disseveru/alchemy-solana-bot)
+
+Or manually:
+1. Click **New Project** → **Deploy from GitHub repo**.
+2. Select **Disseveru/alchemy-solana-bot**.
+3. Railway will detect the Rust project automatically.
+
+#### Step 3 — Set environment variables
+
+1. In your Railway project, click the service name.
+2. Click the **Variables** tab.
+3. Add each variable from the table below (click **+ New Variable**):
+
+| Variable | Value | Required? |
+|----------|-------|-----------|
+| `GRPC_URL` | Your Alchemy gRPC endpoint | ✅ Yes |
+| `X_TOKEN` | Your Alchemy X-Token | ✅ Yes |
+| `RPC_URL` | Your Alchemy HTTPS endpoint | ✅ Yes |
+| `WALLET_PRIVATE_KEY` | Your base-58 wallet key | ✅ Yes |
+| `JITO_BLOCK_ENGINE_URL` | `https://mainnet.block-engine.jito.wtf:443` | ✅ Yes |
+| `ARB_ENABLED` | `false` (until route is fully configured) | ✅ Yes |
+| `RUST_LOG` | `info` | Recommended |
+
+> **Important:** Railway encrypts environment variables at rest.  Your private key is never visible in logs.
+
+#### Step 4 — Watch the deploy
+
+1. Click the **Deployments** tab.
+2. Click on the latest deployment to see the build log.
+3. A successful build ends with: `Subscription active. Waiting for updates…`
+
+Build time: ~4–6 minutes on first deploy (Rust + Solana SDK), then ~30 seconds on updates.
+
+#### Step 5 — View logs from your phone
+
+1. Open the Railway app or [railway.app](https://railway.app) in your phone browser.
+2. Click your project → service → **Logs** tab.
+3. You'll see live transaction updates scrolling in real time.
+
+#### Step 6 — Restart the bot
+
+If the bot stops:
+1. Go to **Deployments** → click the three-dot menu on the latest deployment.
+2. Click **Redeploy**.
+
+Or push any commit to GitHub — Railway redeploys automatically.
+
+---
+
+### Option B – Render.com
+
+1. Create a free account at [render.com](https://render.com).
+2. Click **New** → **Web Service**.
+3. Connect your GitHub repo.
+4. Set **Build Command**: `cargo build --release`
+5. Set **Start Command**: `./target/release/alchemy-solana-bot`
+6. Set **Plan**: Free (spins down after 15 min inactivity — use **Starter** plan for 24/7).
+7. Add all environment variables under **Environment** tab.
+
+---
+
+### Option C – Cheap VPS (most control, ~$5/month)
+
+Good options: [Hetzner](https://www.hetzner.com) CX22, [DigitalOcean](https://digitalocean.com) Basic Droplet, or [Vultr](https://vultr.com) Cloud Compute.
+
+```bash
+# 1. SSH into your server (shown after creation)
+ssh root@YOUR_SERVER_IP
+
+# 2. Install Rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source ~/.cargo/env
+
+# 3. Clone the repo
+git clone https://github.com/Disseveru/alchemy-solana-bot.git
+cd alchemy-solana-bot
+
+# 4. Create your .env file
+cp .env.example .env
+nano .env   # fill in your values, save with Ctrl+O then Ctrl+X
+
+# 5. Build the bot (takes ~5 minutes)
+cargo build --release
+
+# 6. Run it forever in the background with systemd
+sudo tee /etc/systemd/system/alchemy-bot.service > /dev/null <<EOF
+[Unit]
+Description=Alchemy Solana MEV Bot
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/alchemy-solana-bot
+EnvironmentFile=/root/alchemy-solana-bot/.env
+ExecStart=/root/alchemy-solana-bot/target/release/alchemy-solana-bot
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable alchemy-bot
+sudo systemctl start alchemy-bot
+
+# 7. Check logs from anywhere
+sudo journalctl -u alchemy-bot -f
+```
+
+---
 
 ## Key dependencies
 
@@ -324,11 +448,60 @@ Watch for:
    `.env`).
 2. It establishes a TLS-enabled gRPC connection to the Alchemy endpoint,
    injecting the X-Token as a metadata header.
-3. A `SubscribeRequest` is sent that selects **all account updates** and **all
-   non-vote transactions** at the `Confirmed` commitment level.
-4. Incoming `SubscribeUpdate` messages are decoded and printed to stdout.
-5. Each update is also forwarded to `Executor::on_account_update` or
-   `Executor::on_transaction` — this is where your strategy code runs.
+3. A `SubscribeRequest` is sent that watches for DEX program account updates and
+   non-vote transactions from Raydium, Orca, and Solend.
+4. Incoming `SubscribeUpdate` messages are decoded and forwarded to
+   `Executor::on_account_update` / `Executor::on_transaction` for strategy evaluation.
+5. When `ARB_ENABLED=true` and the `ArbRoute` is fully configured, a parallel
+   `BackrunEngine` subscribes to the Jito mempool stream and submits flash-loan
+   arbitrage bundles when an opportunity is detected.
 6. If the stream closes or returns an error, the bot waits five seconds and
    reconnects automatically.
+
+---
+
+## Final verification checklist
+
+Before going live, confirm every item below:
+
+### ✅ Basic setup
+- [ ] `.env` file exists (copied from `.env.example`)
+- [ ] `GRPC_URL` and `X_TOKEN` are filled in and the bot prints "Subscription active"
+- [ ] `cargo test` passes (16 tests)
+
+### ✅ Wallet & funds
+- [ ] `WALLET_PRIVATE_KEY` or `WALLET_KEY_FILE` is set in `.env`
+- [ ] Startup log shows your wallet pubkey (not a random ephemeral key)
+- [ ] Wallet has ≥ 0.1 SOL for fees and tips
+- [ ] Wallet is **not** your main Solana wallet
+- [ ] `.env` is in `.gitignore` ✓ (already is)
+
+### ✅ Arbitrage route (only needed when ARB_ENABLED=true)
+- [ ] All `Pubkey::default()` fields in `src/main.rs` replaced with real addresses
+- [ ] `our_loan_token_account` SPL account created and funded
+- [ ] `our_raydium_source`, `our_raydium_dest` SPL accounts created
+- [ ] `our_orca_token_a`, `our_orca_token_b` SPL accounts created
+- [ ] Each address verified with `solana account <PUBKEY>`
+- [ ] `validate_route()` passes (bot logs "engine started", not "route validation failed")
+
+### ✅ Production
+- [ ] `RUST_LOG=info` (or `debug` during testing)
+- [ ] `ARB_ENABLED=true` only after route is fully configured
+- [ ] Bot is deployed 24/7 (Railway, Render, or VPS)
+- [ ] Jito explorer checked for landed bundles after first run
+- [ ] Wallet balance monitored regularly
+
+---
+
+> 💡 **What to do next (for complete beginners)**
+>
+> 1. **Step 1**: Create an Alchemy account → get `GRPC_URL` and `X_TOKEN`.
+> 2. **Step 2**: Deploy to Railway (click the button above) → set env vars → see the bot start.
+> 3. **Step 3**: Generate a new wallet with `solana-keygen` → add 0.5 SOL.
+> 4. **Step 4**: Create the required SPL token accounts for wSOL and USDC.
+> 5. **Step 5**: Fill in every `Pubkey::default()` field in `src/main.rs` with verified addresses.
+> 6. **Step 6**: Set `ARB_ENABLED=true`, `RUST_LOG=debug`, redeploy, watch for `[BackrunEngine] opportunity` log lines.
+> 7. **Step 7**: Check [explorer.jito.wtf](https://explorer.jito.wtf) for your landed bundles.
+>
+> ⚠️ **Start small.** Use the minimum loan amount and tip until you confirm bundles land and profit exceeds fees.
 

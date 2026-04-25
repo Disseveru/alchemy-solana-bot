@@ -636,17 +636,28 @@ impl BackrunEngine {
             ));
         }
 
+        // Prepend compute budget instructions so the arb transaction competes for
+        // block space under congestion — same as executor.send_bundle does.
+        let [priority_ix, limit_ix] = self.executor.compute_budget_ixs();
+
         // Instruction order is critical for atomicity:
-        //   0  FlashBorrowReserveLiquidity  — borrow loan token from Solend
-        //   1  SwapBaseIn (Raydium)         — buy underpriced arb token
-        //   2  Swap (Orca)                  — sell arb token at fair price
-        //   3  FlashRepayReserveLiquidity   — repay Solend (aborts if underfunded)
-        //   4  system::transfer             — Jito tip
-        let instructions = [
+        //   0  SetComputeUnitPrice          — priority fee (must be first)
+        //   1  SetComputeUnitLimit          — cap compute consumption
+        //   2  FlashBorrowReserveLiquidity  — borrow loan token from Solend
+        //   3  SwapBaseIn (Raydium)         — buy underpriced arb token
+        //   4  Swap (Orca)                  — sell arb token at fair price
+        //   5  FlashRepayReserveLiquidity   — repay Solend (aborts if underfunded)
+        //   6  system::transfer             — Jito tip
+        //
+        // The `borrow_instruction_index` (2) tells Solend which instruction in this
+        // transaction is the matching FlashBorrow, so it can verify atomicity.
+        let instructions = vec![
+            priority_ix,
+            limit_ix,
             self.flash_borrow_ix(opp.loan_amount),
             self.raydium_swap_ix(opp.loan_amount, opp.min_raydium_out),
             self.orca_swap_ix(opp.gross_output, opp.min_orca_out),
-            self.flash_repay_ix(opp.loan_amount + opp.loan_fee, 0),
+            self.flash_repay_ix(opp.loan_amount + opp.loan_fee, 2),
             self.jito_tip_ix(self.config.jito_tip_lamports),
         ];
 
@@ -843,7 +854,10 @@ impl BackrunEngine {
     ///
     /// * `amount` must equal the borrowed amount **plus** the flash-loan fee.
     /// * `borrow_instruction_index` is the zero-based index of the matching
-    ///   `FlashBorrowReserveLiquidity` instruction in this transaction (0 here).
+    ///   `FlashBorrowReserveLiquidity` instruction in this transaction.
+    ///   When compute budget instructions are prepended (as `build_and_submit` does),
+    ///   the flash borrow sits at index **2** (after SetComputeUnitPrice and
+    ///   SetComputeUnitLimit), so pass `2` from `build_and_submit`.
     ///
     /// Solend reads the instructions sysvar to verify the borrow and repay
     /// are in the same transaction and that the amounts match.  If this check
