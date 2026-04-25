@@ -8,17 +8,22 @@ use {
     yellowstone_grpc_client::{ClientTlsConfig, GeyserGrpcClient},
     yellowstone_grpc_proto::prelude::{
         subscribe_update::UpdateOneof, CommitmentLevel, SubscribeRequest,
-        SubscribeRequestFilterAccounts, SubscribeRequestFilterTransactions,
+        SubscribeRequestFilterAccounts, SubscribeRequestFilterSlots,
+        SubscribeRequestFilterTransactions,
     },
 };
 mod executor;
+mod jito;
 use executor::{Executor, ExecutorConfig};
 
 /// How long to wait before attempting a reconnect after a stream failure.
 const RECONNECT_DELAY: Duration = Duration::from_secs(5);
 
-/// Build a subscription request that listens for all account updates and
-/// all non-vote transactions.
+/// How often the background task refreshes the cached blockhash (~2 slots).
+const BLOCKHASH_REFRESH_INTERVAL: Duration = Duration::from_millis(800);
+
+/// Build a subscription request that listens for slot updates, account updates,
+/// and all non-vote transactions.
 fn build_subscribe_request() -> SubscribeRequest {
     let mut accounts: HashMap<String, SubscribeRequestFilterAccounts> = HashMap::new();
     // An empty filter matches every account update.
@@ -43,17 +48,26 @@ fn build_subscribe_request() -> SubscribeRequest {
         },
     );
 
+    let mut slots: HashMap<String, SubscribeRequestFilterSlots> = HashMap::new();
+    // Subscribe to slot updates so we can keep current_slot up to date.
+    slots.insert(
+        "slots".to_string(),
+        SubscribeRequestFilterSlots { filter_by_commitment: None, interslot_updates: None },
+    );
+
     SubscribeRequest {
         accounts,
         transactions,
+        slots,
         commitment: Some(CommitmentLevel::Confirmed as i32),
         ..Default::default()
     }
 }
 
-/// Connect to the Yellowstone gRPC endpoint and stream updates, printing each
-/// one to stdout and dispatching to the [`Executor`] for strategy evaluation.
-/// Returns an error only if the connection itself fails; stream errors are
+/// Connect to the Yellowstone gRPC endpoint and stream updates, dispatching to
+/// the [`Executor`] for strategy evaluation.
+///
+/// Returns an error only if the initial connection fails; stream errors are
 /// handled by logging and triggering a reconnect from the caller.
 async fn run_stream(grpc_url: &str, x_token: &str, executor: Arc<Executor>) -> Result<()> {
     info!("Connecting to gRPC endpoint: {}", grpc_url);
@@ -70,7 +84,7 @@ async fn run_stream(grpc_url: &str, x_token: &str, executor: Arc<Executor>) -> R
         .await
         .context("Failed to connect to gRPC endpoint")?;
 
-    info!("Connected. Subscribing to account and transaction updates…");
+    info!("Connected. Subscribing to slot, account, and transaction updates…");
 
     let request = build_subscribe_request();
     let mut stream = client
@@ -85,6 +99,10 @@ async fn run_stream(grpc_url: &str, x_token: &str, executor: Arc<Executor>) -> R
             Ok(update) => {
                 if let Some(update_oneof) = update.update_oneof {
                     match update_oneof {
+                        UpdateOneof::Slot(slot_update) => {
+                            // Keep the cached slot counter up to date.
+                            executor.update_slot(slot_update.slot);
+                        }
                         UpdateOneof::Account(account_update) => {
                             if let Some(info) = &account_update.account {
                                 info!(
@@ -153,7 +171,26 @@ async fn main() -> Result<()> {
     info!("Alchemy Solana gRPC Bot starting…");
 
     // Build the executor once and share it across reconnect iterations.
-    let executor = Arc::new(Executor::new(ExecutorConfig::default()));
+    let executor = Arc::new(
+        Executor::new(ExecutorConfig::default())
+            .await
+            .context("Failed to initialise Executor")?,
+    );
+
+    // ── Background blockhash refresh task ────────────────────────────────────
+    // Keeps SharedState::latest_blockhash fresh so on_transaction never needs
+    // to call the RPC endpoint in the hot-path.
+    {
+        let executor_ref = Arc::clone(&executor);
+        tokio::spawn(async move {
+            loop {
+                if let Err(e) = executor_ref.refresh_blockhash().await {
+                    warn!("[Blockhash] refresh failed: {:#}", e);
+                }
+                sleep(BLOCKHASH_REFRESH_INTERVAL).await;
+            }
+        });
+    }
 
     // Outer reconnect loop – keeps the bot running even if the stream drops.
     loop {

@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+package searcher;
+
+import "bundle.proto";
+
+// Jito Block Engine Searcher Service.
+service SearcherService {
+  // Submit a bundle of transactions for atomic inclusion.
+  rpc SendBundle(SendBundleRequest) returns (SendBundleResponse) {}
+
+  // Subscribe to a stream of bundle result notifications.
+  rpc SubscribeBundleResults(SubscribeBundleResultsRequest) returns (stream bundle.BundleResult) {}
+
+  // Retrieve the list of tip accounts (one must receive a lamport tip per bundle).
+  rpc GetTipAccounts(GetTipAccountsRequest) returns (GetTipAccountsResponse) {}
+}
+
+message SendBundleRequest {
+  bundle.Bundle bundle = 1;
+}
+
+message SendBundleResponse {
+  // Jito-assigned UUID for tracking the bundle.
+  string uuid = 1;
+}
+
+message SubscribeBundleResultsRequest {}
+
+message GetTipAccountsRequest {}
+
+message GetTipAccountsResponse {
+  repeated string accounts = 1;
+}

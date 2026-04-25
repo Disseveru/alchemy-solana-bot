@@ -1,77 +1,121 @@
-//! # Execution Logic
+//! # Execution Logic – High-Performance Flash-Loan Arbitrage Executor
 //!
-//! This is the home of your **trading strategy**.
+//! This module implements a latency-optimised backrunning executor for Solana.
 //!
-//! The module is intentionally left as a well-structured skeleton.  The stream
-//! in `main.rs` is already wired up to call [`Executor::on_account_update`] and
-//! [`Executor::on_transaction`] for every Geyser event.  All you need to do is
-//! fill in the `TODO` sections below with your own buy / sell rules.
+//! ## Key design decisions
 //!
-//! ## Step-by-step guide
-//!
-//! 1. **Configure your wallet** – see [`ExecutorConfig`] and the `TODO` inside
-//!    [`Executor::new`].
-//! 2. **Add account-based rules** – see [`Executor::on_account_update`].
-//! 3. **Add transaction-based rules** – see [`Executor::on_transaction`].
-//! 4. **Send a transaction** – [`Executor::send_transaction`] is fully
-//!    implemented; just call it with your instructions.
-//!
-//! ## Solana SDK imports you will need
-//!
-//! ```rust,ignore
-//! use solana_sdk::{
-//!     instruction::Instruction,
-//!     pubkey::Pubkey,
-//!     signature::Keypair,
-//!     signer::Signer,
-//!     system_instruction,          // e.g. system_instruction::transfer(...)
-//!     transaction::Transaction,
-//! };
-//! use solana_client::nonblocking::rpc_client::RpcClient;
-//! ```
+//! * **Cached blockhash** – a background task refreshes [`SharedState::latest_blockhash`]
+//!   every few slots so that [`Executor::send_bundle`] never calls the RPC in the
+//!   hot-path.
+//! * **Persistent Jito gRPC channel** – established once in [`Executor::new`]
+//!   using lazy connect so startup succeeds even when the block-engine is
+//!   temporarily unreachable.
+//! * **Fast-path detection** – [`Executor::on_transaction`] checks for known
+//!   DEX program IDs in the message account list *before* any expensive parsing,
+//!   and skips failed transactions with a single branch.
+//! * **No format! in the hot-path** – debug logging uses `debug!` which is
+//!   compiled away in release builds; error paths use static strings.
 
 use {
-    anyhow::Result,
+    anyhow::{Context, Result},
     log::{debug, info, warn},
     solana_client::nonblocking::rpc_client::RpcClient,
     solana_sdk::{
+        hash::Hash,
         instruction::Instruction,
         pubkey::Pubkey,
         signature::{Keypair, Signature},
         signer::Signer,
         transaction::Transaction,
     },
+    std::sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    tokio::sync::RwLock,
+    tonic::transport::Channel,
     yellowstone_grpc_proto::prelude::{
         SubscribeUpdateAccountInfo, SubscribeUpdateTransactionInfo,
     },
 };
+
+use crate::jito::{
+    bundle::Bundle,
+    packet::{Meta, Packet},
+    searcher::{
+        searcher_service_client::SearcherServiceClient, GetTipAccountsRequest, SendBundleRequest,
+    },
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Well-known program IDs used for fast-path detection
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Jupiter v6 aggregator.
+const JUPITER_V6_PROGRAM_ID: Pubkey =
+    Pubkey::from_str_const("JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4");
+
+/// Raydium Liquidity Pool v4.
+const RAYDIUM_LIQUIDITY_POOL_V4: Pubkey =
+    Pubkey::from_str_const("675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8");
+
+/// Default minimum SOL balance delta (lamports) required to trigger a backrun.
+/// 0.1 SOL – tune this based on gas costs and expected profit.
+const DEFAULT_MIN_LAMPORTS_DELTA: u64 = 100_000_000;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Shared network state
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Thread-safe network state updated by a background task.
+///
+/// `on_transaction` reads this state without any network I/O.
+pub struct SharedState {
+    /// Most recently confirmed blockhash.  Starts as [`Hash::default`] until
+    /// the background refresher completes its first call.
+    pub latest_blockhash: RwLock<Hash>,
+    /// Slot of the most recently observed block.
+    pub current_slot: AtomicU64,
+}
+
+impl SharedState {
+    fn new() -> Self {
+        Self {
+            latest_blockhash: RwLock::new(Hash::default()),
+            current_slot: AtomicU64::new(0),
+        }
+    }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Configuration
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Strategy-level configuration.
-///
-/// Add any parameters your strategy needs here (price thresholds, target
-/// addresses, position sizes, etc.) and pass them in when you call
-/// [`Executor::new`].
 #[derive(Debug)]
 pub struct ExecutorConfig {
-    /// Solana JSON-RPC endpoint used to broadcast signed transactions.
+    /// Solana JSON-RPC endpoint used for blockhash refresh and fallback
+    /// transaction broadcast.
     ///
-    /// **TODO:** Replace the default public endpoint with your private Alchemy
-    /// HTTP RPC endpoint for lower latency and higher rate limits:
-    ///
-    /// ```text
-    /// rpc_url: "https://solana-mainnet.g.alchemy.com/v2/YOUR_ALCHEMY_API_KEY".to_string(),
-    /// ```
+    /// **Recommendation:** Use your private Alchemy endpoint for lower latency:
+    /// `https://solana-mainnet.g.alchemy.com/v2/YOUR_API_KEY`
     pub rpc_url: String,
+
+    /// Jito Block Engine gRPC endpoint.
+    pub jito_url: String,
+
+    /// Minimum SOL balance delta (lamports) to trigger a backrun attempt.
+    pub min_lamports: u64,
 }
 
 impl Default for ExecutorConfig {
     fn default() -> Self {
         Self {
-            rpc_url: "https://api.mainnet-beta.solana.com".to_string(),
+            rpc_url: std::env::var("RPC_URL")
+                .unwrap_or_else(|_| "https://api.mainnet-beta.solana.com".to_string()),
+            jito_url: std::env::var("JITO_BLOCK_ENGINE_URL")
+                .unwrap_or_else(|_| "https://mainnet.block-engine.jito.wtf:443".to_string()),
+            min_lamports: DEFAULT_MIN_LAMPORTS_DELTA,
         }
     }
 }
@@ -80,91 +124,101 @@ impl Default for ExecutorConfig {
 // Executor
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// The central strategy handler.
+/// High-performance flash-loan arbitrage executor.
 ///
-/// `main.rs` creates one instance of this struct and passes every incoming
-/// Geyser event to its methods.  Your trading logic lives here.
+/// `main.rs` creates one instance wrapped in `Arc<Executor>` and passes every
+/// incoming Geyser event to [`on_account_update`] / [`on_transaction`].
+///
+/// [`on_account_update`]: Executor::on_account_update
+/// [`on_transaction`]: Executor::on_transaction
 pub struct Executor {
-    /// Strategy configuration (RPC URL, thresholds, …).
     #[allow(dead_code)]
-    pub config: ExecutorConfig,
-    /// Non-blocking JSON-RPC client – used by [`send_transaction`] to broadcast
-    /// signed transactions.
+    config: ExecutorConfig,
+    /// Non-blocking RPC client – used only by the background blockhash refresher
+    /// and the fallback [`send_transaction`].
     ///
     /// [`send_transaction`]: Executor::send_transaction
-    #[allow(dead_code)]
-    rpc: RpcClient,
-    /// The wallet that signs every outgoing transaction.
-    #[allow(dead_code)]
-    wallet: Keypair,
+    rpc: Arc<RpcClient>,
+    /// Signing keypair for outgoing transactions.
+    wallet: Arc<Keypair>,
+    /// Cached network state updated by the background task.
+    pub state: Arc<SharedState>,
+    /// Pre-initialised Jito Block Engine searcher client.
+    /// Tonic clients are cheaply cloneable – the underlying channel is shared.
+    jito_client: SearcherServiceClient<Channel>,
+    /// Minimum lamport delta to consider an opportunity worth backrunning.
+    min_lamports: u64,
 }
 
 impl Executor {
-    /// Construct a new `Executor`.
+    /// Construct a new `Executor`, establishing the Jito gRPC channel.
     ///
-    /// # TODO – load your real wallet
+    /// The channel uses lazy connect so startup succeeds even when the block
+    /// engine endpoint is temporarily unreachable.
     ///
-    /// Replace the `Keypair::new()` call below with code that loads your actual
-    /// keypair from a file or environment variable **before** going live:
+    /// # TODO – load your real wallet before going live
     ///
     /// ```rust,ignore
-    /// // Option A: load from a Solana CLI-style JSON key file
+    /// // Option A – JSON key file
     /// use solana_sdk::signature::read_keypair_file;
-    /// let wallet = read_keypair_file("/path/to/wallet.json")
-    ///     .expect("Failed to read wallet keypair");
+    /// let wallet = read_keypair_file("/path/to/wallet.json")?;
     ///
-    /// // Option B: load from a base-58 private key in an env variable
-    /// let secret = std::env::var("WALLET_PRIVATE_KEY")
-    ///     .expect("WALLET_PRIVATE_KEY not set");
-    /// let wallet = Keypair::from_base58_string(&secret);
+    /// // Option B – base-58 env var
+    /// let wallet = Keypair::from_base58_string(&std::env::var("WALLET_PRIVATE_KEY")?);
     /// ```
-    pub fn new(config: ExecutorConfig) -> Self {
-        let rpc = RpcClient::new(config.rpc_url.clone());
+    pub async fn new(config: ExecutorConfig) -> Result<Self> {
+        let rpc = Arc::new(RpcClient::new(config.rpc_url.clone()));
 
-        // ── TODO (REQUIRED BEFORE GOING LIVE) ────────────────────────────────
-        // Replace `Keypair::new()` with a real keypair loaded from disk or env.
-        // A throwaway keypair is used here so the project compiles and runs
-        // without any additional setup.
-        let wallet = Keypair::new();
-        // ─────────────────────────────────────────────────────────────────────
+        // Ephemeral keypair – replace with a real funded wallet before going live.
+        let wallet = Arc::new(Keypair::new());
+
+        // Lazy Jito gRPC channel: connects on the first RPC call, not at startup.
+        let channel = Channel::from_shared(config.jito_url.clone())
+            .context("Invalid JITO_BLOCK_ENGINE_URL")?
+            .connect_lazy();
+        let jito_client = SearcherServiceClient::new(channel);
 
         info!(
-            "[Executor] initialised | rpc={} | wallet={}",
+            "[Executor] initialised | rpc={} | jito={} | wallet={}",
             config.rpc_url,
+            config.jito_url,
             wallet.pubkey()
         );
-        Self { config, rpc, wallet }
+
+        let min_lamports = config.min_lamports;
+        Ok(Self {
+            config,
+            rpc,
+            wallet,
+            state: Arc::new(SharedState::new()),
+            jito_client,
+            min_lamports,
+        })
+    }
+
+    // ── Cached state helpers ──────────────────────────────────────────────────
+
+    /// Update the cached slot counter.  Called by `main.rs` on every slot event.
+    pub fn update_slot(&self, slot: u64) {
+        self.state.current_slot.store(slot, Ordering::Relaxed);
+    }
+
+    /// Fetch the latest blockhash from the RPC endpoint and cache it.
+    ///
+    /// This should be called from a **background task**, not inside the
+    /// transaction hot-path.
+    pub async fn refresh_blockhash(&self) -> Result<()> {
+        let bh = self.rpc.get_latest_blockhash().await?;
+        *self.state.latest_blockhash.write().await = bh;
+        debug!("[Executor] blockhash refreshed: {}", bh);
+        Ok(())
     }
 
     // ── Event hooks ───────────────────────────────────────────────────────────
 
-    /// Called once for **every account update** the stream delivers.
+    /// Called once for every account update.
     ///
-    /// This is your primary entry point for data-driven buy/sell decisions
-    /// based on on-chain account state (e.g. price feeds, pool reserves,
-    /// vault balances).
-    ///
-    /// # How to add your logic
-    ///
-    /// 1. Decode `account.data` to extract the numbers that matter to your
-    ///    strategy (price, liquidity, flag bits, …).
-    /// 2. Apply your entry/exit conditions.
-    /// 3. Call `self.send_transaction(vec![your_instruction]).await?` to trade.
-    ///
-    /// ```rust,ignore
-    /// // ── Example skeleton ──────────────────────────────────────────────────
-    /// use solana_sdk::{pubkey, system_instruction};
-    ///
-    /// const WATCHED: Pubkey = pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
-    ///
-    /// if Pubkey::try_from(account.pubkey.as_slice())? == WATCHED {
-    ///     let price = decode_price(&account.data); // your decode function
-    ///     if price < BUY_THRESHOLD {
-    ///         let ix = build_buy_instruction(&self.wallet.pubkey(), AMOUNT_LAMPORTS);
-    ///         self.send_transaction(vec![ix]).await?;
-    ///     }
-    /// }
-    /// ```
+    /// Add pool-reserve or price-feed monitoring logic here.
     pub async fn on_account_update(
         &self,
         account: &SubscribeUpdateAccountInfo,
@@ -191,94 +245,172 @@ impl Executor {
         );
 
         // ══════════════════════════════════════════════════════════════════════
-        // TODO: ADD YOUR ACCOUNT-BASED TRADING LOGIC HERE
+        // TODO: Add account-based strategy logic here.
         //
-        //  ✦  Check `pubkey` against your watched address list.
+        //  ✦  Match `pubkey` against watched pool / vault addresses.
         //  ✦  Decode `account.data` using your program's state layout.
-        //  ✦  Compare values against your entry / exit thresholds.
-        //  ✦  Call `self.send_transaction(vec![your_instruction]).await?`.
+        //  ✦  Derive an arb opportunity and call `self.send_bundle(...)`.
         // ══════════════════════════════════════════════════════════════════════
 
         Ok(())
     }
 
-    /// Called once for **every transaction update** the stream delivers.
+    /// Called once for every transaction update – the hot-path entry point.
     ///
-    /// Use this hook to react to on-chain activity — DEX swaps, token mints,
-    /// program invocations — rather than raw account state.
+    /// Applies fast-path guards in order of cheapest first:
+    /// 1. Skip failed transactions.
+    /// 2. Skip transactions that do not touch a known DEX program.
+    /// 3. Skip transactions whose maximum SOL balance delta is below the
+    ///    configured threshold.
     ///
-    /// # How to add your logic
-    ///
-    /// 1. Inspect `tx.transaction` for the message (accounts, instructions).
-    /// 2. Inspect `tx.meta` for pre/post token balances and log messages.
-    /// 3. Call `self.send_transaction(vec![your_instruction]).await?` to trade.
-    ///
-    /// ```rust,ignore
-    /// // ── Example skeleton ──────────────────────────────────────────────────
-    /// if let Some(meta) = &tx.meta {
-    ///     for log in &meta.log_messages {
-    ///         if log.contains("Swap") {
-    ///             // TODO: parse log, compute arb opportunity
-    ///             let ix = build_arb_instruction(&self.wallet.pubkey());
-    ///             self.send_transaction(vec![ix]).await?;
-    ///             break;
-    ///         }
-    ///     }
-    /// }
-    /// ```
+    /// No network I/O is performed inside this method.
     pub async fn on_transaction(
         &self,
         tx: &SubscribeUpdateTransactionInfo,
         slot: u64,
     ) -> Result<()> {
+        // ── Guard 1: skip failed transactions immediately ─────────────────────
+        let meta = match tx.meta.as_ref() {
+            Some(m) if m.err.is_none() => m,
+            _ => return Ok(()),
+        };
+
+        // ── Guard 2: fast-path DEX program check ─────────────────────────────
+        // Check the message account list for target DEX program IDs.  This is
+        // O(n) over the (typically small) account list with zero allocations.
+        let is_target_dex = tx
+            .transaction
+            .as_ref()
+            .and_then(|t| t.message.as_ref())
+            .map(|msg| {
+                msg.account_keys.iter().any(|k| {
+                    let arr: [u8; 32] = k.as_slice().try_into().unwrap_or([0u8; 32]);
+                    let pk = Pubkey::from(arr);
+                    pk == JUPITER_V6_PROGRAM_ID || pk == RAYDIUM_LIQUIDITY_POOL_V4
+                })
+            })
+            .unwrap_or(false);
+
+        if !is_target_dex {
+            return Ok(());
+        }
+
+        // ── Guard 3: minimum SOL balance delta ───────────────────────────────
+        let largest_delta = meta
+            .pre_balances
+            .iter()
+            .zip(meta.post_balances.iter())
+            .map(|(pre, post)| pre.abs_diff(*post))
+            .max()
+            .unwrap_or(0);
+
+        if largest_delta < self.min_lamports {
+            return Ok(());
+        }
+
         debug!(
-            "[Executor] transaction | sig={} slot={}",
-            bs58::encode(&tx.signature).into_string(),
-            slot
+            "[Executor] arb candidate | slot={} delta={}",
+            slot, largest_delta
         );
 
         // ══════════════════════════════════════════════════════════════════════
-        // TODO: ADD YOUR TRANSACTION-BASED TRADING LOGIC HERE
+        // TODO: Build your flash-loan arbitrage instructions and submit via
+        // `send_bundle`.
         //
-        //  ✦  Inspect `tx.transaction` (message accounts + instructions).
-        //  ✦  Inspect `tx.meta` (log_messages, pre/post token balances, err).
-        //  ✦  Call `self.send_transaction(vec![your_instruction]).await?`.
+        // Example skeleton:
+        //   let borrow_ix = build_borrow_ix(&self.wallet.pubkey(), largest_delta);
+        //   let swap_ix   = build_swap_ix(...);
+        //   let repay_ix  = build_repay_ix(...);
+        //   let tip_ix    = build_tip_ix(&tip_account, TIP_LAMPORTS);
+        //   self.send_bundle(vec![borrow_ix, swap_ix, repay_ix, tip_ix]).await?;
         // ══════════════════════════════════════════════════════════════════════
 
         Ok(())
     }
 
-    // ── Transaction helper ────────────────────────────────────────────────────
+    // ── Bundle submission ─────────────────────────────────────────────────────
 
-    /// Sign and send a transaction, waiting for on-chain confirmation.
+    /// Wrap `instructions` in a signed [`Transaction`], pack it into a Jito
+    /// [`Bundle`], and submit it to the Block Engine.
     ///
-    /// Pass in the list of [`Instruction`]s you want to execute.  The helper
-    /// fetches the latest blockhash, builds a signed [`Transaction`], and
-    /// submits it via the configured RPC endpoint.
+    /// Uses the **cached** blockhash – zero network I/O in the submission path.
     ///
-    /// Returns the confirmed [`Signature`] on success.
+    /// Returns the Jito bundle UUID on success.
+    #[allow(dead_code)]
+    pub async fn send_bundle(&self, instructions: Vec<Instruction>) -> Result<String> {
+        // Read the cached blockhash (RwLock held only long enough to copy).
+        let blockhash = *self.state.latest_blockhash.read().await;
+        if blockhash == Hash::default() {
+            return Err(anyhow::anyhow!(
+                "[Executor] blockhash not yet cached – background refresher may not have run"
+            ));
+        }
+
+        // Sign the transaction using the cached blockhash – no network call.
+        let tx = Transaction::new_signed_with_payer(
+            &instructions,
+            Some(&self.wallet.pubkey()),
+            &[self.wallet.as_ref()],
+            blockhash,
+        );
+
+        // Serialize in the bincode format the Solana runtime expects.
+        let data = bincode::serialize(&tx).context("Failed to serialize transaction")?;
+        let data_len = data.len() as u64;
+
+        let packet = Packet {
+            data,
+            meta: Some(Meta {
+                size: data_len,
+                addr: String::new(),
+                port: 0,
+                flags: None,
+                sender_stake: 0,
+            }),
+        };
+
+        let bundle = Bundle {
+            packets: vec![packet],
+        };
+
+        // Clone the client – tonic clients share the underlying gRPC channel so
+        // this is a cheap reference-count increment, not a new connection.
+        let mut client = self.jito_client.clone();
+        let response = client
+            .send_bundle(SendBundleRequest {
+                bundle: Some(bundle),
+            })
+            .await
+            .context("Jito SendBundle RPC failed")?;
+
+        let uuid = response.into_inner().uuid;
+        info!("[Executor] bundle submitted | uuid={}", uuid);
+        Ok(uuid)
+    }
+
+    /// Retrieve Jito tip accounts.  At least one must receive a lamport tip per
+    /// submitted bundle.
+    #[allow(dead_code)]
+    pub async fn get_tip_accounts(&self) -> Result<Vec<String>> {
+        let mut client = self.jito_client.clone();
+        let response = client
+            .get_tip_accounts(GetTipAccountsRequest {})
+            .await
+            .context("Jito GetTipAccounts RPC failed")?;
+        Ok(response.into_inner().accounts)
+    }
+
+    /// Fallback: sign and broadcast a transaction through the configured Solana
+    /// RPC endpoint (bypassing Jito).  Use [`send_bundle`] for MEV submissions.
     ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// use solana_sdk::system_instruction;
-    ///
-    /// // Send 0.001 SOL to a recipient
-    /// let ix = system_instruction::transfer(
-    ///     &self.wallet.pubkey(),
-    ///     &recipient_pubkey,
-    ///     1_000_000, // lamports
-    /// );
-    /// let sig = self.send_transaction(vec![ix]).await?;
-    /// println!("confirmed: {}", sig);
-    /// ```
+    /// [`send_bundle`]: Executor::send_bundle
     #[allow(dead_code)]
     pub async fn send_transaction(&self, instructions: Vec<Instruction>) -> Result<Signature> {
         let recent_blockhash = self.rpc.get_latest_blockhash().await?;
         let tx = Transaction::new_signed_with_payer(
             &instructions,
             Some(&self.wallet.pubkey()),
-            &[&self.wallet],
+            &[self.wallet.as_ref()],
             recent_blockhash,
         );
         let sig = self.rpc.send_and_confirm_transaction(&tx).await?;

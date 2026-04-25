@@ -49,16 +49,23 @@ name = "alchemy-solana-bot"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bincode",
  "bs58",
  "dotenvy",
  "env_logger 0.11.10",
  "futures",
  "log",
+ "prost",
+ "prost-types",
+ "protoc-bin-vendored",
  "serde",
  "serde_json",
  "solana-client",
  "solana-sdk",
  "tokio",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
  "yellowstone-grpc-client",
  "yellowstone-grpc-proto",
 ]
