@@ -425,7 +425,7 @@ impl Executor {
         )?;
 
         let tip_account = strategy.static_tip_account.ok_or_else(|| {
-            anyhow!("Jito tip account is unavailable; set JITO_TIP_ACCOUNT or enable block engine lookup")
+            anyhow!("Jito tip account is unavailable; set JITO_TIP_ACCOUNT or configure JITO_BLOCK_ENGINE_URL so a tip account can be fetched before submission")
         })?;
         let tip_instruction = system_instruction::transfer(
             &self.wallet.pubkey(),
