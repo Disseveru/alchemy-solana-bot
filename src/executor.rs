@@ -726,7 +726,7 @@ fn parse_bool(value: &str) -> Result<bool> {
 
 fn decode_hex(value: &str) -> Result<Vec<u8>> {
     let trimmed = value.trim_start_matches("0x");
-    if trimmed.len() % 2 != 0 {
+    if !trimmed.len().is_multiple_of(2) {
         bail!("hex string must have an even length");
     }
 
