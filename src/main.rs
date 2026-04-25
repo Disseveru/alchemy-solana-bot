@@ -12,6 +12,7 @@ use {
     },
 };
 mod executor;
+mod jito;
 use executor::{Executor, ExecutorConfig};
 
 /// How long to wait before attempting a reconnect after a stream failure.

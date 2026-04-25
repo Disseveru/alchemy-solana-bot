@@ -83,20 +83,22 @@ dependencies = [
  "anchor-lang",
  "anyhow",
  "bincode",
- "borsh 1.6.1",
  "bs58",
  "dotenvy",
  "env_logger",
  "futures",
- "jito-protos",
- "jito-searcher-client",
  "log",
+ "prost 0.12.6",
+ "prost-types 0.12.6",
+ "protoc-bin-vendored",
  "serde",
  "serde_json",
  "solana-client",
  "solana-sdk",
  "spl-token 7.0.0",
  "tokio",
+ "tonic 0.10.2",
+ "tonic-build 0.10.2",
  "yellowstone-grpc-client",
  "yellowstone-grpc-proto",
 ]
@@ -539,12 +541,6 @@ dependencies = [
  "quote",
  "syn 1.0.109",
 ]
-
-[[package]]
-name = "assert_matches"
-version = "1.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9b34d609dfbaf33d6889b2b7106d3ca345eacad44200913df5ba02bfd31d2ba9"
 
 [[package]]
 name = "async-channel"
@@ -2488,38 +2484,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
-]
-
-[[package]]
-name = "jito-protos"
-version = "0.1.0"
-dependencies = [
- "bincode",
- "bytes",
- "prost 0.12.6",
- "prost-types 0.12.6",
- "protoc-bin-vendored",
- "solana-perf",
- "solana-sdk",
- "tonic 0.10.2",
- "tonic-build 0.10.2",
-]
-
-[[package]]
-name = "jito-searcher-client"
-version = "0.1.0"
-dependencies = [
- "futures-util",
- "jito-protos",
- "log",
- "prost-types 0.12.6",
- "solana-client",
- "solana-metrics",
- "solana-sdk",
- "solana-transaction-status",
- "thiserror 1.0.69",
- "tokio",
- "tonic 0.10.2",
 ]
 
 [[package]]
@@ -5406,34 +5370,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "solana-transaction-status"
-version = "2.1.16"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d551f506a53022863458d85e4088de58f6938cc0a27d6454bc055ee5fd42ea3f"
-dependencies = [
- "Inflector",
- "base64 0.22.1",
- "bincode",
- "borsh 1.6.1",
- "bs58",
- "lazy_static",
- "log",
- "serde",
- "serde_derive",
- "serde_json",
- "solana-account-decoder",
- "solana-sdk",
- "solana-transaction-status-client-types",
- "spl-associated-token-account",
- "spl-memo",
- "spl-token 6.0.0",
- "spl-token-2022",
- "spl-token-group-interface",
- "spl-token-metadata-interface",
- "thiserror 1.0.69",
-]
-
-[[package]]
 name = "solana-transaction-status-client-types"
 version = "2.1.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5581,22 +5517,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d96d2d1d716fb500937168cc09353ffdc7a012be8475ac7308e1bdf0e3923300"
 dependencies = [
  "lock_api",
-]
-
-[[package]]
-name = "spl-associated-token-account"
-version = "4.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68034596cf4804880d265f834af1ff2f821ad5293e41fa0f8f59086c181fc38e"
-dependencies = [
- "assert_matches",
- "borsh 1.6.1",
- "num-derive",
- "num-traits",
- "solana-program",
- "spl-token 6.0.0",
- "spl-token-2022",
- "thiserror 1.0.69",
 ]
 
 [[package]]

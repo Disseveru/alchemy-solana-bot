@@ -8,13 +8,13 @@
 
 use {
     anyhow::{anyhow, bail, Context, Result},
-    futures::StreamExt,
-    jito_protos::{
+    crate::jito::{
         bundle::{bundle_result::Result as BundleResultType, rejected::Reason, Bundle},
-        packet::{Meta as ProtoPacketMeta, Packet as ProtoPacket},
+        get_searcher_client_no_auth,
+        proto_packet_from_versioned_tx,
         searcher::{GetTipAccountsRequest, NextScheduledLeaderRequest, SendBundleRequest, SubscribeBundleResultsRequest},
     },
-    jito_searcher_client::get_searcher_client_no_auth,
+    futures::StreamExt,
     log::{debug, info, warn},
     solana_client::nonblocking::rpc_client::RpcClient,
     solana_sdk::{
@@ -663,20 +663,6 @@ impl StrategyInstructionTemplate {
             data,
         })
     }
-}
-
-fn proto_packet_from_versioned_tx(tx: &VersionedTransaction) -> Result<ProtoPacket> {
-    let data = bincode::serialize(tx).context("failed to serialize versioned transaction for Jito")?;
-    Ok(ProtoPacket {
-        data: data.clone(),
-        meta: Some(ProtoPacketMeta {
-            size: data.len() as u64,
-            addr: String::new(),
-            port: 0,
-            flags: None,
-            sender_stake: 0,
-        }),
-    })
 }
 
 fn env_u64(name: &str) -> Option<u64> {
