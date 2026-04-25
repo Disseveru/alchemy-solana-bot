@@ -2492,12 +2492,12 @@ dependencies = [
 [[package]]
 name = "jito-protos"
 version = "0.1.0"
-source = "git+https://github.com/jito-labs/searcher-examples?rev=f710c30b0ec7449b5122f827b0997218ab1a0315#f710c30b0ec7449b5122f827b0997218ab1a0315"
 dependencies = [
  "bincode",
  "bytes",
  "prost 0.12.6",
  "prost-types 0.12.6",
+ "protoc-bin-vendored",
  "solana-perf",
  "solana-sdk",
  "tonic 0.10.2",
@@ -2507,7 +2507,6 @@ dependencies = [
 [[package]]
 name = "jito-searcher-client"
 version = "0.1.0"
-source = "git+https://github.com/jito-labs/searcher-examples?rev=f710c30b0ec7449b5122f827b0997218ab1a0315#f710c30b0ec7449b5122f827b0997218ab1a0315"
 dependencies = [
  "futures-util",
  "jito-protos",
