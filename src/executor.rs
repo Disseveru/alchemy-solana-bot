@@ -43,9 +43,7 @@ use {
         signer::Signer,
         transaction::Transaction,
     },
-    yellowstone_grpc_proto::prelude::{
-        SubscribeUpdateAccountInfo, SubscribeUpdateTransactionInfo,
-    },
+    yellowstone_grpc_proto::prelude::{SubscribeUpdateAccountInfo, SubscribeUpdateTransactionInfo},
 };
 
 const PRIORITY_FEE_MICROLAMPORTS: u64 = 100_000;
@@ -140,7 +138,11 @@ impl Executor {
             config.rpc_url,
             wallet.pubkey()
         );
-        Self { config, rpc, wallet }
+        Self {
+            config,
+            rpc,
+            wallet,
+        }
     }
 
     // ── Event hooks ───────────────────────────────────────────────────────────
@@ -205,10 +207,7 @@ impl Executor {
             Ok(state) => {
                 debug!(
                     "[Executor] decoded watched account | pubkey={} price={} liquidity={} slot={}",
-                    pubkey,
-                    state.price,
-                    state.liquidity,
-                    slot
+                    pubkey, state.price, state.liquidity, slot
                 );
             }
             Err(err) => {
@@ -254,11 +253,7 @@ impl Executor {
         slot: u64,
     ) -> Result<()> {
         let signature = bs58::encode(&tx.signature).into_string();
-        debug!(
-            "[Executor] transaction | sig={} slot={}",
-            signature,
-            slot
-        );
+        debug!("[Executor] transaction | sig={} slot={}", signature, slot);
 
         let Some(meta) = tx.meta.as_ref() else {
             debug!("[Executor] transaction has no metadata | sig={}", signature);
@@ -272,9 +267,7 @@ impl Executor {
         {
             info!(
                 "[Executor] trading opportunity candidate | sig={} slot={} log={}",
-                signature,
-                slot,
-                log_message
+                signature, slot, log_message
             );
         }
 
@@ -308,11 +301,10 @@ impl Executor {
     #[allow(dead_code)]
     pub async fn send_transaction(&self, instructions: Vec<Instruction>) -> Result<Signature> {
         let recent_blockhash = self.rpc.get_latest_blockhash().await?;
-        let mut instructions_with_priority_fee =
-            Vec::with_capacity(instructions.len() + 1);
-        instructions_with_priority_fee.push(
-            ComputeBudgetInstruction::set_compute_unit_price(PRIORITY_FEE_MICROLAMPORTS),
-        );
+        let mut instructions_with_priority_fee = Vec::with_capacity(instructions.len() + 1);
+        instructions_with_priority_fee.push(ComputeBudgetInstruction::set_compute_unit_price(
+            PRIORITY_FEE_MICROLAMPORTS,
+        ));
         instructions_with_priority_fee.extend(instructions);
         let tx = Transaction::new_signed_with_payer(
             &instructions_with_priority_fee,

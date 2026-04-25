@@ -48,6 +48,9 @@ GRPC_URL=https://solana-mainnet.g.alchemy.com/v2/YOUR_ALCHEMY_API_KEY
 
 # The x-token value for authentication
 X_TOKEN=YOUR_X_TOKEN_HERE
+
+# Base-58 encoded Solana private key for signing trades
+WALLET_PRIVATE_KEY=YOUR_BASE58_PRIVATE_KEY
 ```
 
 > **Where to find these values:**
@@ -126,6 +129,7 @@ The bot runs in an infinite reconnect loop by design.  Hit `Ctrl+C` to exit.
 | `Failed to connect to gRPC endpoint` | Wrong URL or no internet | Double-check `GRPC_URL` in `.env`; try opening it in a browser |
 | `Stream error: status: Unauthenticated` | Wrong or missing X-Token | Verify `X_TOKEN` matches the value in the Alchemy dashboard |
 | `Stream error: status: PermissionDenied` | Yellowstone gRPC not enabled for your app | Enable it in the Alchemy app settings |
+| `WALLET_PRIVATE_KEY environment variable not set` | Signing key missing from `.env` or shell | Add your base-58 private key to `.env` before running the bot |
 | Connected but no data after 10 s | Subscription filter too narrow | Check the filter in `main.rs::build_subscribe_request` |
 | Bot keeps reconnecting every 5 s | Persistent server-side error | Check Alchemy status page; reduce subscription scope |
 
@@ -198,4 +202,3 @@ Open `src/executor.rs`.  Everything is labelled with `TODO` comments:
    `Executor::on_transaction` — this is where your strategy code runs.
 6. If the stream closes or returns an error, the bot waits five seconds and
    reconnects automatically.
-
