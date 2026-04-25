@@ -1,0 +1,395 @@
+# Instincts generated from https://github.com/Disseveru/alchemy-solana-bot
+# Generated: 2026-04-25T06:18:32.033Z
+# Version: 2.0
+# NOTE: This file supplements (does not replace) any existing curated instincts.
+# High-confidence manually curated instincts should be preserved alongside these.
+
+---
+id: alchemy-solana-bot-commit-conventional
+trigger: "when writing a commit message"
+confidence: 0.85
+domain: git
+source: repo-analysis
+source_repo: https://github.com/Disseveru/alchemy-solana-bot
+---
+
+# Alchemy Solana Bot Commit Conventional
+
+## Action
+
+Use conventional commit format with prefixes: feat
+
+## Evidence
+
+- 4 commits analyzed
+- Detected conventional commit pattern
+- Examples: feat: implement high-performance flash-loan arbitrage executor with Jito gRPC, Initial plan
+
+---
+id: alchemy-solana-bot-commit-length
+trigger: "when writing a commit message"
+confidence: 0.6
+domain: git
+source: repo-analysis
+source_repo: https://github.com/Disseveru/alchemy-solana-bot
+---
+
+# Alchemy Solana Bot Commit Length
+
+## Action
+
+Write moderate-length commit messages (~56 characters)
+
+## Evidence
+
+- Average commit message length: 56 chars
+- Based on 4 commits
+
+---
+id: alchemy-solana-bot-naming-files
+trigger: "when creating a new file"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/Disseveru/alchemy-solana-bot
+---
+
+# Alchemy Solana Bot Naming Files
+
+## Action
+
+Use camelCase naming convention
+
+## Evidence
+
+- Analyzed file naming patterns in repository
+- Dominant pattern: camelCase
+
+---
+id: alchemy-solana-bot-import-relative
+trigger: "when importing modules"
+confidence: 0.75
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/Disseveru/alchemy-solana-bot
+---
+
+# Alchemy Solana Bot Import Relative
+
+## Action
+
+Use relative imports for project files
+
+## Evidence
+
+- Import analysis shows relative import pattern
+- Example: import { x } from '../lib/x'
+
+---
+id: alchemy-solana-bot-export-style
+trigger: "when exporting from a module"
+confidence: 0.7
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/Disseveru/alchemy-solana-bot
+---
+
+# Alchemy Solana Bot Export Style
+
+## Action
+
+Prefer named exports
+
+## Evidence
+
+- Export pattern analysis
+- Dominant style: named
+
+---
+id: alchemy-solana-bot-test-separate
+trigger: "when writing tests"
+confidence: 0.8
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/Disseveru/alchemy-solana-bot
+---
+
+# Alchemy Solana Bot Test Separate
+
+## Action
+
+Place tests in the tests/ or __tests__/ directory, mirroring src structure
+
+## Evidence
+
+- Separate test directory pattern detected
+- Tests live in dedicated test folders
+
+---
+id: alchemy-solana-bot-workflow-feature-implementation-across-core-modules
+trigger: "when doing feature implementation across core modules"
+confidence: 0.6
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/Disseveru/alchemy-solana-bot
+---
+
+# Alchemy Solana Bot Workflow Feature Implementation Across Core Modules
+
+## Action
+
+Follow the feature-implementation-across-core-modules workflow:
+1. Update or create relevant .rs files in src/ (e.g., executor.rs, arb.rs, main.rs, jito.rs)
+2. Update or add protobuf definitions in protos/ (e.g., searcher.proto, bundle.proto, packet.proto, shared.proto)
+3. Update build configuration (Cargo.toml, Cargo.lock, build.rs) if dependencies or build steps change
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~2x per month
+- Files: src/executor.rs, src/arb.rs, src/jito.rs
+
+---
+id: alchemy-solana-bot-workflow-feature-hardening-and-configuration-docs
+trigger: "when doing feature hardening and configuration docs"
+confidence: 0.6
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/Disseveru/alchemy-solana-bot
+---
+
+# Alchemy Solana Bot Workflow Feature Hardening And Configuration Docs
+
+## Action
+
+Follow the feature-hardening-and-configuration-docs workflow:
+1. Update core logic files in src/ (e.g., executor.rs, arb.rs, main.rs) to support new config/env vars and improve code quality
+2. Add or update environment variable documentation in .env.example
+3. Update README.md with new instructions, setup steps, and warnings
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~2x per month
+- Files: src/executor.rs, src/arb.rs, src/main.rs
+
+---
+id: alchemy-solana-bot-instinct-camelcase-funcs
+trigger: "When defining a function in Rust"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: Disseveru/alchemy-solana-bot
+---
+
+# Alchemy Solana Bot Instinct Camelcase Funcs
+
+## Action
+
+Name the function using camelCase
+
+## Evidence
+
+- Pattern in namingConventions.functions
+- Seen in src/executor.rs, src/arb.rs
+
+---
+id: alchemy-solana-bot-instinct-pascalcase-structs
+trigger: "When defining a struct or class in Rust"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: Disseveru/alchemy-solana-bot
+---
+
+# Alchemy Solana Bot Instinct Pascalcase Structs
+
+## Action
+
+Name the struct/class using PascalCase
+
+## Evidence
+
+- Pattern in namingConventions.classes
+- Seen in src/executor.rs
+
+---
+id: alchemy-solana-bot-instinct-screaming-constants
+trigger: "When defining a constant in Rust"
+confidence: 0.9
+domain: code-style
+source: repo-analysis
+source_repo: Disseveru/alchemy-solana-bot
+---
+
+# Alchemy Solana Bot Instinct Screaming Constants
+
+## Action
+
+Name the constant using SCREAMING_SNAKE_CASE
+
+## Evidence
+
+- Pattern in namingConventions.constants
+- Seen in src/arb.rs
+
+---
+id: alchemy-solana-bot-instinct-camelcase-files
+trigger: "When creating a new source file"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: Disseveru/alchemy-solana-bot
+---
+
+# Alchemy Solana Bot Instinct Camelcase Files
+
+## Action
+
+Name the file using camelCase
+
+## Evidence
+
+- Pattern in namingConventions.files
+- Seen in src/executor.rs, src/jito.rs
+
+---
+id: alchemy-solana-bot-instinct-relative-imports
+trigger: "When importing modules in Rust"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: Disseveru/alchemy-solana-bot
+---
+
+# Alchemy Solana Bot Instinct Relative Imports
+
+## Action
+
+Use relative imports
+
+## Evidence
+
+- Pattern in importStyle
+- Seen in src/arb.rs
+
+---
+id: alchemy-solana-bot-instinct-named-exports
+trigger: "When exporting functions or structs in Rust"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: Disseveru/alchemy-solana-bot
+---
+
+# Alchemy Solana Bot Instinct Named Exports
+
+## Action
+
+Use named exports
+
+## Evidence
+
+- Pattern in exportStyle
+- Seen in src/executor.rs
+
+---
+id: alchemy-solana-bot-instinct-separate-tests
+trigger: "When adding tests"
+confidence: 0.7
+domain: testing
+source: repo-analysis
+source_repo: Disseveru/alchemy-solana-bot
+---
+
+# Alchemy Solana Bot Instinct Separate Tests
+
+## Action
+
+Place test files in a separate location from source files
+
+## Evidence
+
+- Pattern in architecture.testLocation
+- No test files in src/
+
+---
+id: alchemy-solana-bot-instinct-conventional-commits-feat
+trigger: "When committing a new feature"
+confidence: 0.9
+domain: git
+source: repo-analysis
+source_repo: Disseveru/alchemy-solana-bot
+---
+
+# Alchemy Solana Bot Instinct Conventional Commits Feat
+
+## Action
+
+Use the conventional commit prefix 'feat:' followed by a concise description
+
+## Evidence
+
+- Pattern in commits.prefixes
+- Seen in commit 'feat: implement high-performance flash-loan arbitrage executor with Jito gRPC'
+
+---
+id: alchemy-solana-bot-instinct-commit-length
+trigger: "When writing a commit message"
+confidence: 0.7
+domain: git
+source: repo-analysis
+source_repo: Disseveru/alchemy-solana-bot
+---
+
+# Alchemy Solana Bot Instinct Commit Length
+
+## Action
+
+Keep the commit message around 56 characters on average
+
+## Evidence
+
+- Pattern in commits.averageLength
+- Seen in commit examples
+
+---
+id: alchemy-solana-bot-instinct-feature-implementation-workflow
+trigger: "When adding a new core feature or engine to the bot"
+confidence: 0.95
+domain: workflow
+source: repo-analysis
+source_repo: Disseveru/alchemy-solana-bot
+---
+
+# Alchemy Solana Bot Instinct Feature Implementation Workflow
+
+## Action
+
+Update or create relevant .rs files in src/, update/add protobuf definitions in protos/, and update build configuration files if needed
+
+## Evidence
+
+- Workflow 'feature-implementation-across-core-modules'
+- Seen in commits updating src/*.rs, protos/*.proto, Cargo.toml, build.rs
+
+---
+id: alchemy-solana-bot-instinct-feature-hardening-workflow
+trigger: "When improving robustness, configurability, or documentation for an existing feature"
+confidence: 0.9
+domain: workflow
+source: repo-analysis
+source_repo: Disseveru/alchemy-solana-bot
+---
+
+# Alchemy Solana Bot Instinct Feature Hardening Workflow
+
+## Action
+
+Update core logic files in src/, update .env.example, and update README.md with new instructions and setup steps
+
+## Evidence
+
+- Workflow 'feature-hardening-and-configuration-docs'
+- Seen in commits updating src/*.rs, .env.example, README.md
+
